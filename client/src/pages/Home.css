@@ -338,6 +338,8 @@
   background: white;
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  flex-shrink: 0;
+  /* Don't shrink when keyboard opens */
 }
 
 .chat-user-info {
@@ -524,6 +526,8 @@
   background: white;
   border-top: 1px solid rgba(0, 0, 0, 0.05);
   box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.04);
+  flex-shrink: 0;
+  /* Don't shrink when keyboard opens */
 }
 
 .attachment-btn,
@@ -818,6 +822,11 @@
   .chat-header {
     padding: 12px 16px;
     flex-wrap: wrap;
+    flex-shrink: 0;
+    /* Always stay at top */
+    position: sticky;
+    top: 0;
+    z-index: 10;
   }
 
   .chat-user-info {
@@ -885,6 +894,10 @@
   .message-input-container {
     padding: 12px 16px;
     gap: 8px;
+    flex-shrink: 0;
+    /* Always visible at bottom */
+    position: sticky;
+    bottom: 0;
   }
 
   .attachment-btn,
