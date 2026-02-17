@@ -451,6 +451,11 @@ const Home = () => {
           </>
         ) : (
           <div className="no-chat-selected">
+            <button className="mobile-menu-btn" onClick={toggleSidebar} style={{ position: 'absolute', top: '20px', left: '20px' }}>
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
             <div className="no-chat-icon">💬</div>
             <h2>Welcome to ChatApp</h2>
             <p>Select a user from the sidebar to start chatting</p>
