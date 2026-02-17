@@ -11,7 +11,7 @@ let userSocketMap = {};
 const socketConfig = (server) => {
   const io = new Server(server, {
     cors: {
-      origin: "http://localhost:5173", 
+      origin: ["http://localhost:5173", "http://13.61.12.47:5173", "http://13.61.12.47:5174"], 
       methods: ["GET", "POST"],
       credentials:true
     }
