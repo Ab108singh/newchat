@@ -1,6 +1,8 @@
 .home-container {
   display: flex;
   height: 100vh;
+  height: 100dvh;
+  /* Use dynamic viewport height for mobile keyboard support */
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   overflow: hidden;
@@ -324,6 +326,8 @@
   display: flex;
   flex-direction: column;
   background: white;
+  min-height: 0;
+  /* Allow flex child to shrink below content size */
 }
 
 /* Chat Header */
@@ -398,6 +402,10 @@
   overflow-y: auto;
   padding: 24px 32px;
   background: linear-gradient(to bottom, #f9fafb 0%, #ffffff 100%);
+  min-height: 0;
+  /* Allow flex child to shrink */
+  -webkit-overflow-scrolling: touch;
+  /* Smooth scrolling on iOS */
 }
 
 .no-messages {
@@ -795,6 +803,10 @@
     flex: 1;
     min-width: 0;
     /* Prevent flex item overflow */
+    min-height: 0;
+    /* Critical for keyboard adaptation */
+    height: 100dvh;
+    /* Use dynamic viewport height */
   }
 
   /* Adjust chat header */
@@ -845,6 +857,10 @@
   /* Messages */
   .messages-container {
     padding: 16px;
+    min-height: 0;
+    /* Critical for flex shrinking */
+    overscroll-behavior: contain;
+    /* Prevent pull-to-refresh while scrolling */
   }
 
   .message-bubble {
@@ -902,6 +918,9 @@
     bottom: 65px;
     right: 16px;
     left: 16px;
+    max-height: 50vh;
+    /* Limit height on mobile */
+    max-height: 50dvh;
   }
 
   .emoji-picker-container aside {
