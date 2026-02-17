@@ -1,7 +1,6 @@
 .home-container {
   display: flex;
   height: 100vh;
-  height: 100dvh;
   /* Use dynamic viewport height for mobile keyboard support */
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -769,6 +768,9 @@
   .home-container {
     display: flex;
     flex-direction: row;
+    height: 95vh;
+    /* Slightly reduced for better mobile visibility */
+    height: 95dvh;
     /* Keep flex but ensure chat area takes priority */
   }
 
@@ -784,9 +786,9 @@
     left: -100%;
     width: 85%;
     max-width: 320px;
-    height: 100vh;
-    height: 100dvh;
-    /* Use dynamic viewport height for mobile browsers */
+    height: 95vh;
+    height: 95dvh;
+    /* Match container height for consistency */
     z-index: 999;
     transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
@@ -805,8 +807,11 @@
     /* Prevent flex item overflow */
     min-height: 0;
     /* Critical for keyboard adaptation */
-    height: 100dvh;
-    /* Use dynamic viewport height */
+    height: 95vh;
+    height: 95dvh;
+    /* Match container height */
+    display: flex;
+    flex-direction: column;
   }
 
   /* Adjust chat header */
