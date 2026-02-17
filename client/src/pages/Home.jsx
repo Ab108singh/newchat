@@ -66,7 +66,7 @@ const Home = () => {
     if(!socket || !user || users.length === 0) return; // ✅ Wait for users to load
     
     // Fetch conversations for current user
-    axios.get(`http://localhost:3000/api/conversation/conversations/${user._id}`,{
+    axios.get(`${import.meta.env.VITE_API_URL}/conversation/conversations/${user._id}`,{
       withCredentials:true
     }).then((res)=>{
       console.log(res.data);
@@ -97,7 +97,7 @@ const Home = () => {
     if(!socket || !selectedUser || !user) return;
     
     // Fetch messages between current user and selected user
-    axios.get(`http://localhost:3000/api/message/messages/${selectedUser._id}`,{
+    axios.get(`${import.meta.env.VITE_API_URL}/message/messages/${selectedUser._id}`,{
       params: { userId: user._id },
       withCredentials:true
     }).then((res)=>{
@@ -119,7 +119,7 @@ const Home = () => {
 
   // Mock users data - Replace with actual API call
   useEffect(() => {
-    axios.get("http://localhost:3000/api/user/users",{
+    axios.get(`${import.meta.env.VITE_API_URL}/user/users`,{
       withCredentials:true
     }).then((res)=>{
       setUsers(res.data.users.filter(u => u._id !== user._id));
@@ -229,7 +229,7 @@ const Home = () => {
 
   const handleLogout = async () => {
     try {
-      await axios.post('http://localhost:3000/api/user/logout', {}, {
+      await axios.post(`${import.meta.env.VITE_API_URL}/user/logout`, {}, {
         withCredentials: true
       });
       logout();

@@ -9,7 +9,7 @@ const App = () => {
   const {login} = useContext(AuthContext);
 
   useEffect(() => {
-    axios.get("http://localhost:3000/api/user/verify",{
+    axios.get(`${import.meta.env.VITE_API_URL}/user/verify`,{
       withCredentials:true
     }).then((res)=>{
       login(res.data.user); 

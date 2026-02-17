@@ -14,7 +14,7 @@ const {user} = useContext(AuthContext);
 
      useEffect(()=>{
       if(user){
-         const socket = io("http://localhost:3000",{
+         const socket = io(import.meta.env.VITE_SOCKET_URL,{
             withCredentials:true,
             query:{
                 userId:user?._id

@@ -44,7 +44,7 @@ const Register = () => {
     }
 
     try {
-      const response = await axios.post('http://localhost:3000/api/user/register', {
+      const response = await axios.post(`${import.meta.env.VITE_API_URL}/user/register`, {
         name: formData.name,
         email: formData.email,
         password: formData.password
