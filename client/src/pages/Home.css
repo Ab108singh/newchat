@@ -516,6 +516,8 @@
 /* Message Input */
 .message-input-wrapper {
   position: relative;
+  flex-shrink: 0;
+  /* Don't compress when keyboard opens */
 }
 
 .message-input-container {
@@ -895,9 +897,7 @@
     padding: 12px 16px;
     gap: 8px;
     flex-shrink: 0;
-    /* Always visible at bottom */
-    position: sticky;
-    bottom: 0;
+    /* Always visible, naturally moves up with keyboard */
   }
 
   .attachment-btn,
