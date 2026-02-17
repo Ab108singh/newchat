@@ -688,7 +688,6 @@
 
 /* Sidebar Overlay for Mobile */
 .sidebar-overlay {
-  display: none;
   position: fixed;
   top: 0;
   left: 0;
@@ -711,7 +710,7 @@
 
 /* ============ RESPONSIVE DESIGN ============ */
 
-/* Tablet */
+/* Large Tablets and Small Desktops */
 @media (max-width: 1024px) {
   .sidebar {
     width: 300px;
@@ -727,6 +726,26 @@
 
   .message-input-container {
     padding: 16px 24px;
+  }
+}
+
+/* Medium Tablets */
+@media (max-width: 900px) {
+  .sidebar {
+    width: 280px;
+  }
+
+  .logo-text {
+    font-size: 20px;
+  }
+
+  .current-user .user-avatar {
+    width: 46px;
+    height: 46px;
+  }
+
+  .message-bubble {
+    max-width: 70%;
   }
 }
 
@@ -756,10 +775,6 @@
 
   .sidebar.open {
     left: 0;
-  }
-
-  .sidebar-overlay {
-    display: block;
   }
 
   /* Chat area takes full width */
@@ -940,10 +955,15 @@
 @media (max-width: 480px) {
   .sidebar {
     width: 90%;
+    max-width: 100%;
   }
 
   .chat-header h3 {
     font-size: 15px;
+  }
+
+  .chat-header {
+    padding: 10px 12px;
   }
 
   /* Hide video call button on very small screens */
@@ -953,6 +973,11 @@
 
   .message-bubble {
     max-width: 90%;
+    padding: 8px 12px;
+  }
+
+  .message-bubble p {
+    font-size: 13px;
   }
 
   .no-messages h3 {
@@ -961,10 +986,40 @@
 
   .no-messages p {
     font-size: 13px;
+    padding: 0 16px;
   }
 
   .no-messages-icon {
     font-size: 48px;
+  }
+
+  /* Make emoji picker fullwidth on very small screens */
+  .emoji-picker-container {
+    left: 8px;
+    right: 8px;
+    bottom: 60px;
+  }
+
+  /* Adjust message input for small screens */
+  .message-input-container {
+    padding: 10px 12px;
+  }
+
+  .message-input {
+    font-size: 13px;
+    padding: 8px 14px;
+  }
+
+  /* Make no-chat-selected more compact */
+  .no-chat-selected h2 {
+    font-size: 20px;
+    padding: 0 20px;
+    text-align: center;
+  }
+
+  .no-chat-selected p {
+    padding: 0 24px;
+    text-align: center;
   }
 }
 

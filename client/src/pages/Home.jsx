@@ -322,6 +322,7 @@ const Home = () => {
               onClick={() => {
                 setSelectedUser(user);
                 setMessages([]);
+                setIsSidebarOpen(false); // Close sidebar on mobile after selecting user
               }}
             >
               <div className="user-avatar-container">
