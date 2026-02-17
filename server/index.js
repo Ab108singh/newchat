@@ -19,12 +19,17 @@ app.use(cors({
     credentials:true
 }))
 
-app.use(express.json());    
+app.use(express.json()); 
+
 
 
 app.use("/api/user",userRoutes)
 app.use("/api/conversation",conversationRoutes)
 app.use("/api/message",messageRoutes)
+
+app.get("/",(req,res)=>{
+    res.send("server is running");
+})
 
 const server = http.createServer(app);
 
