@@ -5,6 +5,9 @@ import axios from 'axios';
 import './Home.css';
 import SocketContext from '../context/SocketContext';
 import EmojiPicker from 'emoji-picker-react';
+import MakeCall from './chat/MakeCall';
+import CallPopup from './chat/Call';
+import CallConnected from './chat/CallConnected';
 
 const Home = () => {
   const navigate = useNavigate();
@@ -19,11 +22,72 @@ const Home = () => {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const emojiPickerRef = useRef(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [showMakeCall, setShowMakeCall] = useState(false);
+  const [callComming, setCallComming] = useState(false);
+  const [incomingCaller, setIncomingCaller] = useState(null);
+  const[callConnected,setCallConnected] = useState(false);
 
 
   
 
  const socket = useContext(SocketContext)
+
+ useEffect(()=>{
+  if(!socket) return;
+  socket.on("call-accepted",({from,to})=>{
+    console.log("call-accepted",from,to);
+    setCallComming(false);  
+    setShowMakeCall(false);
+    setIncomingCaller(null);
+    setCallConnected(true);
+  })
+  return ()=> socket.off("call-accepted");
+ },[socket])
+
+
+
+
+
+
+ useEffect(()=>{
+  if(!socket) return;
+  socket.on("call-declined",({from,to})=>{
+    console.log("call-declined",from,to);
+    setCallComming(false);  
+    setShowMakeCall(false);
+    setIncomingCaller(null);
+    setCallConnected(false);
+  })
+  return ()=> socket.off("call-declined");
+ },[socket])
+
+
+
+
+ useEffect(()=>{
+  if(!socket) return;
+  socket.on("call-user",({user,signalData})=>{
+    console.log("call-user",user,signalData);
+    setIncomingCaller(user);
+    setCallComming(true);
+  })
+  return ()=> socket.off("call-user");
+ },[socket])
+
+
+
+ useEffect(()=>{
+  if(!socket) return;
+  socket.on("end-call",({user,signalData})=>{
+    console.log("end-call",user,signalData);
+    setCallComming(false);  
+    setCallConnected(false);
+    
+  })
+ },[socket])
+
+
+
 
  useEffect(()=>{
   if(selectedUser && user){
@@ -197,6 +261,7 @@ const Home = () => {
         ));
       }
     })
+    
     return ()=>socket.off("receive");
   },[socket,selectedUser,user])  
 
@@ -272,9 +337,60 @@ const Home = () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [showEmojiPicker]);
+  
+
+     const onAccept = () => {
+            setCallComming(false)
+            setCallConnected(true);
+            // TODO: accept call / start WebRTC
+
+            socket.emit("call-accepted", {
+              from: user._id,
+              to: incomingCaller._id
+            });
+          }
+
+     const onDecline = () => {
+            setCallComming(false);
+            setIncomingCaller(null);
+
+            socket.emit("call-declined", {
+              from: user._id,
+              to: incomingCaller._id
+            }); 
+          }
 
   return (
     <div className="home-container">
+      {/* Voice Call Overlay */}
+      {showMakeCall && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9999 }}>
+          <MakeCall onClose={() => setShowMakeCall(false)} selectedUser={selectedUser} />
+        </div>
+      )}
+
+      {/* Incoming Call Popup */}
+      {callComming && (
+        <CallPopup
+          callerName={incomingCaller?.name || 'Unknown'}
+          callerAvatar={incomingCaller?.avatar || null}
+          onAccept={onAccept}   
+          onDecline={onDecline} 
+        />
+      )}
+
+      {/* Call Connected Screen */}
+      {callConnected && (
+        <CallConnected
+          callerName={incomingCaller?.name || selectedUser?.name}
+          callerAvatar={incomingCaller?.avatar || selectedUser?.avatar}
+          onHangup={() => {
+            socket.emit('end-call', { from: user._id, to: incomingCaller?._id || selectedUser?._id, signalData: {} });
+            setCallConnected(false);
+            setIncomingCaller(null);
+          }}
+        />
+      )}
       {/* Mobile Overlay */}
       {isSidebarOpen && <div className="sidebar-overlay" onClick={toggleSidebar}></div>}
       
@@ -370,7 +486,7 @@ const Home = () => {
                 </div>
               </div>
               <div className="chat-actions">
-                <button className="action-btn" title="Voice Call">
+                <button className="action-btn" title="Voice Call" onClick={() => setShowMakeCall(true)}>
                   <svg fill="currentColor" viewBox="0 0 20 20">
                     <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
                   </svg>

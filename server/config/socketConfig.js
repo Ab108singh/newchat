@@ -21,6 +21,10 @@ const socketConfig = (server) => {
     console.log('A user connected:', socket.id);
 
     const userId = socket.handshake.query.userId;
+    let user;
+    if(userId){
+      user = await User.findById(userId);
+    }
     if(userId){
         userSocketMap[userId] = socket.id;
         
@@ -38,6 +42,28 @@ const socketConfig = (server) => {
         socket.broadcast.emit("user-offline", {userId, isOnline:false});
       }
     });
+    socket.on("call-user",({from,to,signalData})=>{
+      console.log("call-user",from,to,signalData);
+      io.to(userSocketMap[to]).emit("call-user",{user,signalData});
+    })
+
+    socket.on("end-call",({from,to,signalData})=>{
+      console.log("end-call",from,to,signalData);
+      io.to(userSocketMap[to]).emit("end-call",{user,signalData});
+    })
+
+    socket.on("call-accepted",({from,to})=>{
+      console.log("call-accepted",from,to);
+      io.to(userSocketMap[to]).emit("call-accepted",{user});
+    })
+
+    socket.on("call-declined",({from,to})=>{
+      console.log("call-declined",from,to);
+      io.to(userSocketMap[to]).emit("call-declined",{user});
+    })
+
+
+
 
     socket.on("message",  async({recId,msg})=>{
 
