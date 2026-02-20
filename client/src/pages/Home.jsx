@@ -8,6 +8,7 @@ import EmojiPicker from 'emoji-picker-react';
 import MakeCall from './chat/MakeCall';
 import CallPopup from './chat/Call';
 import CallConnected from './chat/CallConnected';
+import { useWebRTC } from '../hooks/useWebRTC';
 
 const Home = () => {
   const navigate = useNavigate();
@@ -26,22 +27,58 @@ const Home = () => {
   const [callComming, setCallComming] = useState(false);
   const [incomingCaller, setIncomingCaller] = useState(null);
   const[callConnected,setCallConnected] = useState(false);
+  const [incomingOffer, setIncomingOffer] = useState(null);
+  const [callFromId, setCallFromId] = useState(null);
+  const remoteAudioRef = useRef(null);
 
-
-  
-
- const socket = useContext(SocketContext)
+ const socket = useContext(SocketContext);
+ const { makeCall, answerCall, stopCall, cleanUp, peerRef, localStreamRef } = useWebRTC(socket, user?._id, selectedUser);
 
  useEffect(()=>{
   if(!socket) return;
-  socket.on("call-accepted",({from,to})=>{
-    console.log("call-accepted",from,to);
+  socket.on("call-accepted",()=>{
+    console.log("call-accepted — caller starting WebRTC offer");
     setCallComming(false);  
     setShowMakeCall(false);
-    setIncomingCaller(null);
     setCallConnected(true);
+    // Caller sends WebRTC offer now that receiver accepted
+    makeCall();
   })
   return ()=> socket.off("call-accepted");
+ },[socket])
+
+ // Listen for WebRTC offer (receiver side) — answer it immediately when it arrives
+ useEffect(()=>{
+  if(!socket) return;
+  socket.on("webrtc-offer", ({ from, offer }) => {
+    console.log("webrtc-offer received from:", from, "— answering now");
+    // Answer the call right here — the receiver already accepted via onAccept
+    answerCall(from, offer);
+  });
+  return ()=> socket.off("webrtc-offer");
+ },[socket])
+
+ // Listen for WebRTC answer (caller side)
+ useEffect(()=>{
+  if(!socket) return;
+  socket.on("webrtc-answer", async ({ answer }) => {
+    console.log("webrtc-answer received");
+    if(peerRef.current){
+      await peerRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+    }
+  });
+  return ()=> socket.off("webrtc-answer");
+ },[socket])
+
+ // Listen for ICE candidates (both sides)
+ useEffect(()=>{
+  if(!socket) return;
+  socket.on("ice-candidate", async ({ candidate }) => {
+    if(peerRef.current && candidate){
+      await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+  });
+  return ()=> socket.off("ice-candidate");
  },[socket])
 
 
@@ -340,14 +377,14 @@ const Home = () => {
   
 
      const onAccept = () => {
-            setCallComming(false)
+            setCallComming(false);
             setCallConnected(true);
-            // TODO: accept call / start WebRTC
 
             socket.emit("call-accepted", {
               from: user._id,
               to: incomingCaller._id
             });
+            // answerCall is handled in webrtc-offer handler when the offer arrives
           }
 
      const onDecline = () => {
@@ -388,9 +425,16 @@ const Home = () => {
             socket.emit('end-call', { from: user._id, to: incomingCaller?._id || selectedUser?._id, signalData: {} });
             setCallConnected(false);
             setIncomingCaller(null);
+            setIncomingOffer(null);
+            setCallFromId(null);
+            cleanUp();
           }}
+          localStream={localStreamRef.current}
         />
       )}
+      {/* Hidden audio element for remote peer's voice */}
+      <audio id="remote-audio" ref={remoteAudioRef} autoPlay />
+
       {/* Mobile Overlay */}
       {isSidebarOpen && <div className="sidebar-overlay" onClick={toggleSidebar}></div>}
       

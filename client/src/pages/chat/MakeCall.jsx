@@ -1,23 +1,25 @@
 import React, { useContext, useState } from 'react';
 import SocketContext  from '../../context/SocketContext';
-import { useWebRTC } from '../../hooks/useWebRTC';
+import AuthContext from '../../context/AuthContext';
 
 const MakeCall = ({ onClose, selectedUser }) => {
   const [targetId, setTargetId] = useState(selectedUser?.name || '');
   const [isCalling, setIsCalling] = useState(false);
   const socket = useContext(SocketContext);
-  const {makeCall,stopCall} = useWebRTC(socket,selectedUser._id,selectedUser);
+  const { user } = useContext(AuthContext);
 
   const startCall = () => {
-    console.log("call started")
-    if (targetId.trim()){
-      makeCall();
+    if (targetId.trim() && socket && user) {
+      // Only emit the ring signal — WebRTC offer starts after call-accepted in Home.jsx
+      socket.emit("call-user", { from: user._id, to: selectedUser._id, signalData: {} });
       setIsCalling(true);
     }
   };
 
   const endCall = () => {
-    stopCall();
+    if (socket && user) {
+      socket.emit("end-call", { from: user._id, to: selectedUser._id, signalData: {} });
+    }
     setIsCalling(false);
     onClose?.();
   };

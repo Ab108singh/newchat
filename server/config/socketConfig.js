@@ -62,6 +62,23 @@ const socketConfig = (server) => {
       io.to(userSocketMap[to]).emit("call-declined",{user});
     })
 
+    // WebRTC Signaling — relay SDP offer from caller to receiver
+    socket.on("webrtc-offer", ({ to, offer }) => {
+      console.log("webrtc-offer to:", to);
+      io.to(userSocketMap[to]).emit("webrtc-offer", { from: userId, offer });
+    });
+
+    // WebRTC Signaling — relay SDP answer from receiver back to caller
+    socket.on("webrtc-answer", ({ to, answer }) => {
+      console.log("webrtc-answer to:", to);
+      io.to(userSocketMap[to]).emit("webrtc-answer", { answer });
+    });
+
+    // WebRTC Signaling — relay ICE candidates between peers
+    socket.on("ice-candidate", ({ to, candidate }) => {
+      io.to(userSocketMap[to]).emit("ice-candidate", { candidate });
+    });
+
 
 
 

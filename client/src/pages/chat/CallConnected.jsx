@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 
-const CallConnected = ({ callerName, callerAvatar, onHangup }) => {
+const CallConnected = ({ callerName, callerAvatar, onHangup, localStream }) => {
   const [muted, setMuted] = useState(false);
   const [speakerOff, setSpeakerOff] = useState(false);
   const [seconds, setSeconds] = useState(0);
@@ -15,6 +15,23 @@ const CallConnected = ({ callerName, callerAvatar, onHangup }) => {
     const m = Math.floor(s / 60).toString().padStart(2, '0');
     const sec = (s % 60).toString().padStart(2, '0');
     return `${m}:${sec}`;
+  };
+
+  // Actually mute/unmute the microphone audio track
+  const toggleMute = () => {
+    if (localStream) {
+      localStream.getAudioTracks().forEach(track => {
+        track.enabled = !track.enabled;
+      });
+    }
+    setMuted(m => !m);
+  };
+
+  // Mute/unmute the remote audio element
+  const toggleSpeaker = () => {
+    const audio = document.getElementById('remote-audio');
+    if (audio) audio.muted = !audio.muted;
+    setSpeakerOff(s => !s);
   };
 
   const styles = {
@@ -43,8 +60,7 @@ const CallConnected = ({ callerName, callerAvatar, onHangup }) => {
     avatar: {
       width: '110px', height: '110px', borderRadius: '50%',
       objectFit: 'cover', border: '4px solid #6366f1',
-      boxShadow: '0 0 24px rgba(99,102,241,0.5)',
-      zIndex: 1,
+      boxShadow: '0 0 24px rgba(99,102,241,0.5)', zIndex: 1,
     },
     avatarPlaceholder: {
       width: '110px', height: '110px', borderRadius: '50%',
@@ -109,10 +125,10 @@ const CallConnected = ({ callerName, callerAvatar, onHangup }) => {
 
       {/* Control buttons */}
       <div style={styles.controls}>
-        {/* Mute */}
+        {/* Mute — actually disables mic audio track */}
         <button
           style={styles.iconBtn(muted, '#f59e0b')}
-          onClick={() => setMuted(m => !m)}
+          onClick={toggleMute}
           title={muted ? 'Unmute' : 'Mute'}
           onMouseOver={e => e.currentTarget.style.transform = 'scale(1.1)'}
           onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
@@ -131,10 +147,10 @@ const CallConnected = ({ callerName, callerAvatar, onHangup }) => {
           📵
         </button>
 
-        {/* Speaker */}
+        {/* Speaker — actually mutes the remote audio */}
         <button
           style={styles.iconBtn(speakerOff, '#f59e0b')}
-          onClick={() => setSpeakerOff(s => !s)}
+          onClick={toggleSpeaker}
           title={speakerOff ? 'Speaker On' : 'Speaker Off'}
           onMouseOver={e => e.currentTarget.style.transform = 'scale(1.1)'}
           onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
