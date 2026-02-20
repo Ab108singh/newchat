@@ -1,7 +1,14 @@
 import { useRef, useCallback } from 'react';
 
 const ICE_SERVERS = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    {
+      urls: 'turn:13.61.12.47:3478',
+      username: 'myuser',
+      credential: 'mypassword'
+    }
+  ]
 };
 
 export const useWebRTC = (socket, userId, selectedUser) => {
