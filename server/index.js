@@ -36,7 +36,7 @@ app.use("/api/message", messageRoutes);
 const distPath = path.join(__dirname, "../client/dist");
 if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("/{*wildcard}", (req, res) => {
         // Don't intercept /api routes
         if (!req.path.startsWith("/api")) {
             res.sendFile(path.join(distPath, "index.html"));
