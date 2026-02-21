@@ -7,7 +7,6 @@ const Conversation = require('../models/conversationModel');
 let userSocketMap = {};
 
 
-
 const socketConfig = (server) => {
   const io = new Server(server, {
     cors: {
@@ -145,4 +144,4 @@ socket.on("all-read", async({currentUserId, selectedUserId}) => {
 };
 
 module.exports = socketConfig;
-
+module.exports.userSocketMap = userSocketMap;

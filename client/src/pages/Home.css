@@ -514,6 +514,115 @@
   display: none;
 }
 
+/* ============ IMAGE MESSAGES ============ */
+.message-image-wrapper {
+  position: relative;
+  display: inline-block;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.message-image {
+  display: block;
+  max-width: 240px;
+  width: 100%;
+  border-radius: 10px;
+  cursor: pointer;
+  object-fit: cover;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.message-image:hover {
+  opacity: 0.92;
+  transform: scale(1.01);
+}
+
+.message-image.uploading {
+  opacity: 0.5;
+  filter: blur(1px);
+}
+
+/* When bubble contains an image, remove default text padding */
+.message-bubble:has(.message-image-wrapper) {
+  padding: 4px;
+  background: transparent !important;
+}
+
+.message.me .message-bubble:has(.message-image-wrapper) {
+  background: transparent !important;
+}
+
+.message.other .message-bubble:has(.message-image-wrapper) {
+  background: transparent !important;
+}
+
+/* Keep timestamp below image */
+.message-bubble:has(.message-image-wrapper) .message-time {
+  padding: 0 8px 4px;
+  margin-top: 4px;
+  opacity: 0.7;
+}
+
+.message.me .message-bubble:has(.message-image-wrapper) .message-time {
+  color: #4b5563;
+}
+
+/* Upload overlay shown while image is being uploaded */
+.image-upload-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+}
+
+/* Upload spinner */
+.uploading-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 3px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.uploading-spinner.large {
+  width: 32px;
+  height: 32px;
+  border-width: 4px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Disable attachment btn while uploading */
+.attachment-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Responsive image sizing */
+@media (max-width: 768px) {
+  .message-image {
+    max-width: 180px;
+  }
+
+  .message-bubble {
+    max-width: 75%;
+  }
+}
+
+@media (max-width: 480px) {
+  .message-image {
+    max-width: 140px;
+  }
+}
+
 /* Message Input */
 .message-input-wrapper {
   position: relative;

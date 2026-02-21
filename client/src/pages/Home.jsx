@@ -30,6 +30,8 @@ const Home = () => {
   const [incomingOffer, setIncomingOffer] = useState(null);
   const [callFromId, setCallFromId] = useState(null);
   const remoteAudioRef = useRef(null);
+  const imageInputRef = useRef(null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
  const socket = useContext(SocketContext);
  const { makeCall, answerCall, stopCall, cleanUp, addIceCandidate, peerRef, localStreamRef } = useWebRTC(socket, user?._id, selectedUser);
@@ -210,6 +212,8 @@ const Home = () => {
       // Transform messages to match UI format
       const formattedMessages = res.data.map(msg => ({
         text: msg.message,
+        type: msg.messageType || 'text',
+        imageUrl: msg.imageUrl || null,
         sender: msg.sender === user._id ? 'me' : 'them',
         timestamp: new Date(msg.createdAt),
         isRead: msg.isRead || false
@@ -274,6 +278,8 @@ const Home = () => {
       if(selectedUser && sender === selectedUser._id){
         const newMessage = {
           text:msg,
+          type: 'text',
+          imageUrl: null,
           sender:'them',
           timestamp:new Date(),
           isRead: false
@@ -307,12 +313,44 @@ const Home = () => {
     return ()=>socket.off("receive");
   },[socket,selectedUser,user])  
 
+  useEffect(()=>{
+    if(!socket) return;
+    socket.on("receive-image",({sender, imageUrl})=>{
+      if(selectedUser && sender === selectedUser._id){
+        const newMessage = {
+          text: '',
+          type: 'image',
+          imageUrl,
+          sender: 'them',
+          timestamp: new Date(),
+          isRead: false
+        };
+        setMessages(prev=>[...prev, newMessage]);
+        if(user && socket){
+          socket.emit("all-read", { currentUserId: user._id, selectedUserId: sender });
+        }
+        setSidebarUsers(prev => prev.map(u => 
+          u._id === sender ? {...u, lastMessage: '📷 Photo'} : u
+        ));
+      } else {
+        setSidebarUsers(prev => prev.map(u => 
+          u._id === sender 
+            ? {...u, noofUnreadMessages: (u.noofUnreadMessages || 0) + 1, lastMessage: '📷 Photo'}
+            : u
+        ));
+      }
+    })
+    return ()=>socket.off("receive-image");
+  },[socket,selectedUser,user])
+
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!messageInput.trim() || !selectedUser || !socket) return;
 
     const newMessage = {
       text: messageInput,
+      type: 'text',
+      imageUrl: null,
       sender: 'me',
       timestamp: new Date(),
       isRead: false
@@ -332,6 +370,65 @@ const Home = () => {
     socket.emit('message', { recId: selectedUser._id, msg: messageInput });
 
     setMessageInput('');
+  };
+
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !selectedUser || !user) return;
+
+    // Show optimistic preview with blob URL
+    const previewUrl = URL.createObjectURL(file);
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMsg = {
+      _tempId: tempId,
+      text: '',
+      type: 'image',
+      imageUrl: previewUrl,
+      sender: 'me',
+      timestamp: new Date(),
+      isRead: false,
+      isUploading: true
+    };
+    setMessages(prev => [...prev, optimisticMsg]);
+    setSidebarUsers(prev => prev.map(u => 
+      u._id === selectedUser._id ? {...u, lastMessage: '📷 Photo'} : u
+    ));
+
+    // Reset file input so same file can be re-selected
+    e.target.value = '';
+
+    setIsUploadingImage(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      formData.append('senderId', user._id);
+      formData.append('receiverId', selectedUser._id);
+
+      const res = await axios.post(
+        `${import.meta.env.VITE_API_URL}/message/upload-image`,
+        formData,
+        { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+
+      const { imageUrl } = res.data;
+
+      // Replace optimistic blob URL with real Cloudinary URL
+      setMessages(prev => prev.map(msg => 
+        msg._tempId === tempId 
+          ? { ...msg, imageUrl, isUploading: false, _tempId: undefined }
+          : msg
+      ));
+
+      // Revoke blob URL to free memory
+      URL.revokeObjectURL(previewUrl);
+    } catch (err) {
+      console.error('Image upload failed:', err);
+      // Remove optimistic message on failure
+      setMessages(prev => prev.filter(msg => msg._tempId !== tempId));
+      URL.revokeObjectURL(previewUrl);
+    } finally {
+      setIsUploadingImage(false);
+    }
   };
 
   const handleLogout = async () => {
@@ -565,7 +662,19 @@ const Home = () => {
                 messages.map((msg, idx) => (
                   <div key={idx} className={`message ${msg.sender}`}>
                     <div className="message-bubble">
-                      <p>{msg.text}</p>
+                      {msg.type === 'image' ? (
+                        <div className="message-image-wrapper">
+                          <img 
+                            src={msg.imageUrl} 
+                            alt="Sent image" 
+                            className={`message-image ${msg.isUploading ? 'uploading' : ''}`}
+                            onClick={() => window.open(msg.imageUrl, '_blank')}
+                          />
+                          {msg.isUploading && <div className="image-upload-overlay"><span className="uploading-spinner large" /></div>}
+                        </div>
+                      ) : (
+                        <p>{msg.text}</p>
+                      )}
                       <span className="message-time">
                         {msg.sender === 'me' && (
                           <span className={`read-receipt ${msg.isRead ? 'read' : 'unread'}`}>
@@ -589,11 +698,28 @@ const Home = () => {
                 </div>
               )}
               <form className="message-input-container" onSubmit={handleSendMessage}>
-                <button type="button" className="attachment-btn" title="Attach File">
-                  <svg fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a1 1 0 112 0v4a7 7 0 11-14 0V7a5 5 0 0110 0v4a3 3 0 11-6 0V7a1 1 0 012 0v4a1 1 0 102 0V7a3 3 0 00-3-3z" clipRule="evenodd" />
-                  </svg>
+                <button 
+                  type="button" 
+                  className="attachment-btn" 
+                  title="Attach Image"
+                  onClick={() => imageInputRef.current?.click()}
+                  disabled={isUploadingImage}
+                >
+                  {isUploadingImage ? (
+                    <span className="uploading-spinner" />
+                  ) : (
+                    <svg fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a1 1 0 112 0v4a7 7 0 11-14 0V7a5 5 0 0110 0v4a3 3 0 11-6 0V7a1 1 0 012 0v4a1 1 0 102 0V7a3 3 0 00-3-3z" clipRule="evenodd" />
+                    </svg>
+                  )}
                 </button>
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={handleImageUpload}
+                />
                 <input
                   type="text"
                   placeholder="Type a message..."
