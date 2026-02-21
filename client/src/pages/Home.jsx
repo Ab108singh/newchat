@@ -32,7 +32,7 @@ const Home = () => {
   const remoteAudioRef = useRef(null);
 
  const socket = useContext(SocketContext);
- const { makeCall, answerCall, stopCall, cleanUp, peerRef, localStreamRef } = useWebRTC(socket, user?._id, selectedUser);
+ const { makeCall, answerCall, stopCall, cleanUp, addIceCandidate, peerRef, localStreamRef } = useWebRTC(socket, user?._id, selectedUser);
 
  useEffect(()=>{
   if(!socket) return;
@@ -58,24 +58,29 @@ const Home = () => {
   return ()=> socket.off("webrtc-offer");
  },[socket])
 
- // Listen for WebRTC answer (caller side)
+ // Listen for WebRTC answer (caller side) — set remote description then flush queued ICE candidates
  useEffect(()=>{
   if(!socket) return;
   socket.on("webrtc-answer", async ({ answer }) => {
     console.log("webrtc-answer received");
     if(peerRef.current){
       await peerRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+      console.log("Remote description set ✅ — now flushing queued ICE candidates");
+      // Flush any candidates that arrived before the answer was set
+      for (const candidate of (peerRef.current._iceCandidateQueue || [])) {
+        await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+      }
     }
   });
   return ()=> socket.off("webrtc-answer");
  },[socket])
 
- // Listen for ICE candidates (both sides)
+ // Listen for ICE candidates — safely queued if remoteDescription not set yet
  useEffect(()=>{
   if(!socket) return;
-  socket.on("ice-candidate", async ({ candidate }) => {
-    if(peerRef.current && candidate){
-      await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+  socket.on("ice-candidate", ({ candidate }) => {
+    if(candidate){
+      addIceCandidate(candidate);
     }
   });
   return ()=> socket.off("ice-candidate");
