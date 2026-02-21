@@ -1,6 +1,7 @@
 const Message = require('../models/messageModel');
 const Conversation = require('../models/conversationModel');
 const { getIO } = require('../socket/socketInstance');
+const cloudinary = require('../config/cloudinaryConfig');
 
 const uploadImage = async (req, res) => {
   try {
@@ -14,7 +15,17 @@ const uploadImage = async (req, res) => {
       return res.status(400).json({ message: 'senderId and receiverId are required' });
     }
 
-    const imageUrl = req.file.path; // Cloudinary URL
+    // Upload buffer to Cloudinary using upload_stream (compatible with v2)
+    const imageUrl = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: 'chat-images', resource_type: 'image' },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result.secure_url);
+        }
+      );
+      stream.end(req.file.buffer);
+    });
 
     // Find or create conversation
     let conversation = await Conversation.findOne({
