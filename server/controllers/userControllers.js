@@ -33,23 +33,23 @@ const verifyUser = async(req,res)=>{
 const refreshToken = async(req,res)=>{
     try {
         let token = req.cookies.refreshToken;
-    if(!token){
-        return res.status(401).json({message:"Unauthorized"});
-    }
-    let {id} = jwt.verify(token,process.env.JWT_SECRET);
-    let user = await User.findById(id);
-    if(!user){
-        return res.status(401).json({message:"Unauthorized"});
-    }
-    let newAccessToken = jwt.sign({id:user._id},process.env.JWT_SECRET,{expiresIn:"1h"});
-    res.cookie("accessToken",newAccessToken,{
-        httpOnly:true,
-        secure:false,
-        // sameSite:"strict",
-        maxAge:24*60*60*1000
-    })
-    return res.status(200).json({message:"User verified successfully",user:user});
-   
+        if(!token){
+            return res.status(401).json({message:"Unauthorized"});
+        }
+        let {id} = jwt.verify(token,process.env.JWT_SECRET);
+        let user = await User.findById(id);
+        if(!user){
+            return res.status(401).json({message:"Unauthorized"});
+        }
+        const isProduction = process.env.NODE_ENV === 'production';
+        let newAccessToken = jwt.sign({id:user._id},process.env.JWT_SECRET,{expiresIn:"1h"});
+        res.cookie("accessToken",newAccessToken,{
+            httpOnly:true,
+            secure:isProduction,
+            sameSite: isProduction ? "none" : "strict",
+            maxAge:24*60*60*1000
+        })
+        return res.status(200).json({message:"User verified successfully",user:user});
     } catch (error) {
         return res.status(401).json({message:"Unauthorized"});
     }
@@ -57,55 +57,63 @@ const refreshToken = async(req,res)=>{
 
 
 const registerUser = async(req,res)=>{
-    let data = req.body;
-    
-    let user = await User.findOne({email:data.email});
-    if(user){
-        return res.status(400).json({message:"User already exists"});
-    }
-    let hashPassword = await bcrypt.hash(data.password,10);
-    
-    
-    let newUser = await User.create({...data,password:hashPassword});
-    const io = getIO();
-    io.emit("user-joined",newUser);
+    try {
+        let data = req.body;
+        
+        let user = await User.findOne({email:data.email});
+        if(user){
+            return res.status(400).json({message:"User already exists"});
+        }
+        let hashPassword = await bcrypt.hash(data.password,10);
+        
+        let newUser = await User.create({...data,password:hashPassword});
+        const io = getIO();
+        io.emit("user-joined",newUser);
 
- res.status(201).json({message:"User registered successfully",user:newUser});
+        return res.status(201).json({message:"User registered successfully",user:newUser});
+    } catch (error) {
+        console.error("registerUser error:", error);
+        return res.status(500).json({message:"Registration failed"});
+    }
 }
 
 const loginUser = async(req,res)=>{
-    let data = req.body;
-    // console.log(data)
-    
-    let user = await User.findOne({email:data.email}).select("+password");
-   
+    try {
+        let data = req.body;
+        
+        let user = await User.findOne({email:data.email}).select("+password");
 
-    if(!user){
-        return res.status(400).json({message:"User not found"});
+        if(!user){
+            return res.status(400).json({message:"User not found"});
+        }
+         
+        let result = await bcrypt.compare(data.password,user.password);
+        if(!result){
+            return res.status(400).json({message:"Invalid password"});
+        }
+
+        const isProduction = process.env.NODE_ENV === 'production';
+        const accessToken = jwt.sign({id:user._id},process.env.JWT_SECRET,{expiresIn:"24h"});
+        const refreshToken = jwt.sign({id:user._id},process.env.JWT_SECRET,{expiresIn:"7d"});
+        
+        res.cookie("accessToken",accessToken,{
+            httpOnly:true,
+            secure:isProduction,
+            sameSite: isProduction ? "none" : "strict",
+            maxAge:24*60*60*1000
+        })
+        res.cookie("refreshToken",refreshToken,{
+            httpOnly:true,
+            secure:isProduction,
+            sameSite: isProduction ? "none" : "strict",
+            maxAge:7*24*60*60*1000
+        })
+
+        return res.status(200).json({message:"User logged in successfully",user:user});
+    } catch (error) {
+        console.error("loginUser error:", error);
+        return res.status(500).json({message:"Login failed"});
     }
-     
-    let result = await bcrypt.compare(data.password,user.password);
-    if(!result){
-        return res.status(400).json({message:"Invalid password"});
-    }
-
-    const accessToken = jwt.sign({id:user._id},process.env.JWT_SECRET,{expiresIn:"24h"});
-    const refreshToken = jwt.sign({id:user._id},process.env.JWT_SECRET,{expiresIn:"7d"});
-    
-    res.cookie("accessToken",accessToken,{
-        httpOnly:true,
-        secure:false,//for development
-        sameSite:"strict",
-        maxAge:24*60*60*1000
-    })
-    res.cookie("refreshToken",refreshToken,{
-        httpOnly:true,
-        secure:false,//for development
-        sameSite:"strict",
-        maxAge:7*24*60*60*1000
-    })
-
-    res.status(200).json({message:"User logged in successfully",user:user});
 }
 
 const logoutUser = async(req,res)=>{

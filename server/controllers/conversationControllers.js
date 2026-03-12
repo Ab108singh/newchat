@@ -17,7 +17,6 @@ const getConversations = async(req,res)=>{
         const {userId} = req.params;
         // Use $in to find conversations where userId is in the participants array
         const conversations = await Conversation.find({participants: userId})
-            .populate("messages")
             .lean(); // Convert to plain object - Map is automatically converted
         
         res.status(200).json(conversations);

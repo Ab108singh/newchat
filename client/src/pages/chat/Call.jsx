@@ -68,11 +68,23 @@ const CallPopup = ({ callerName, callerAvatar, onAccept, onDecline }) => {
   return (
     <div style={styles.overlay}>
       <div style={styles.card}>
-        <img 
-          src={callerAvatar || 'https://via.placeholder.com/110'} 
-          alt={callerName} 
-          style={styles.avatar}
-        />
+        {callerAvatar ? (
+          <img 
+            src={callerAvatar} 
+            alt={callerName} 
+            style={styles.avatar}
+          />
+        ) : (
+          <div style={{
+            ...styles.avatar,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            fontSize: '40px', fontWeight: '700', color: 'white',
+            border: '4px solid #3498db'
+          }}>
+            {callerName?.charAt(0)?.toUpperCase() || '?'}
+          </div>
+        )}
         <h2 style={styles.name}>{callerName || "Unknown User"}</h2>
         <p style={styles.subtext}>Incoming Video Call...</p>
         

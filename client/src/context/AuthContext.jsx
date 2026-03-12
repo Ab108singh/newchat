@@ -1,19 +1,29 @@
-import { createContext, useEffect, useState } from "react";
+import { createContext, useState } from "react";
 
 const AuthContext = createContext();
 
 export default AuthContext;
 
 const AuthProvider = ({ children }) => {
-    const [user, setUser] = useState(null);
-    const [loading, setLoading] = useState(true); // true until auth check completes
+    // Restore user from localStorage immediately so socket connects on refresh
+    const [user, setUser] = useState(() => {
+        try {
+            const stored = localStorage.getItem('chat_user');
+            return stored ? JSON.parse(stored) : null;
+        } catch {
+            return null;
+        }
+    });
+    const [loading, setLoading] = useState(true); // true until auth verify completes
 
-    const login = (user) => {
-        setUser(user);
+    const login = (userData) => {
+        setUser(userData);
+        localStorage.setItem('chat_user', JSON.stringify(userData));
     };
 
     const logout = () => {
         setUser(null);
+        localStorage.removeItem('chat_user');
     };
 
     return (
@@ -23,4 +33,4 @@ const AuthProvider = ({ children }) => {
     );
 };
 
-export { AuthProvider };
+export { AuthProvider };

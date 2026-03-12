@@ -7,6 +7,15 @@ const upload = require("../config/multerConfig");
 
 router.post("/message",createMessage);
 router.get("/messages/:otherUserId",getMessages);
-router.post("/upload-image", upload.single('image'), uploadImage);
+
+// BUG-10: Multer errors (wrong type, too large) are caught and returned as clean 400s
+router.post("/upload-image", (req, res, next) => {
+  upload.single('image')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ message: err.message || 'File upload error' });
+    }
+    next();
+  });
+}, uploadImage);
 
 module.exports = router;

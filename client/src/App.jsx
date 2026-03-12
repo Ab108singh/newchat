@@ -14,8 +14,10 @@ const App = () => {
       login(res.data.user);
     }).catch((err) => {
       console.log(err.response);
+      // Clear stale localStorage data if token is expired/invalid
+      logout();
     }).finally(() => {
-      setLoading(false); // Auth check done — either logged in or not
+      setLoading(false);
     });
   }, []);
 

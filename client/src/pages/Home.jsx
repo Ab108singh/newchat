@@ -32,6 +32,15 @@ const Home = () => {
   const remoteAudioRef = useRef(null);
   const imageInputRef = useRef(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const typingTimeoutRef = useRef(null);
+  const [typingUsers, setTypingUsers] = useState({});
+  const [searchQuery, setSearchQuery] = useState('');
+  const [previewImage, setPreviewImage] = useState(null);
+  // Refs so socket handlers always read the LATEST state without re-registering
+  const selectedUserRef = useRef(null);
+  const userRef = useRef(null);
+  selectedUserRef.current = selectedUser;
+  userRef.current = user;
 
  const socket = useContext(SocketContext);
  const { makeCall, answerCall, stopCall, cleanUp, addIceCandidate, peerRef, localStreamRef } = useWebRTC(socket, user?._id, selectedUser);
@@ -126,15 +135,17 @@ const Home = () => {
     console.log("end-call",user,signalData);
     setCallComming(false);  
     setCallConnected(false);
-    
   })
+  // BUG-11: Added missing cleanup to prevent listener accumulation
+  return ()=>socket.off("end-call");
  },[socket])
 
 
 
 
- useEffect(()=>{
-  if(selectedUser && user){
+  useEffect(()=>{
+  if(selectedUser && user && socket){
+    // BUG-13: Added socket guard (was only checking selectedUser && user)
     socket.emit("all-read",{currentUserId:user._id,selectedUserId:selectedUser._id});
     
     // Clear unread count in sidebar immediately (optimistic update)
@@ -154,16 +165,16 @@ const Home = () => {
   useEffect(()=>{
     if(!socket) return;
     socket.on("messages-marked-read",({readBy, messagesFrom})=>{
-      // Only update if you're currently viewing the chat with the person who read your messages
-      if(selectedUser && selectedUser._id === readBy){
-        // Update YOUR sent messages to show double tick
+      // Use ref so this fires correctly regardless of which chat is currently open
+      const currSelected = selectedUserRef.current;
+      if(currSelected && currSelected._id === readBy){
         setMessages(prev => prev.map(msg => 
           msg.sender === 'me' ? {...msg, isRead: true} : msg
         ));
       }
     })
     return ()=>socket.off("messages-marked-read");
-  },[socket, selectedUser])
+  },[socket])
 
   // Auto scroll to bottom
   useEffect(() => {
@@ -274,8 +285,10 @@ const Home = () => {
   useEffect(()=>{
     if(!socket) return;
     socket.on("receive",({sender,msg})=>{
-      console.log("Received message from:",sender,"Message:",msg);
-      if(selectedUser && sender === selectedUser._id){
+      // Use refs to avoid stale closure — listener never re-registers on selectedUser change
+      const currSelected = selectedUserRef.current;
+      const currUser = userRef.current;
+      if(currSelected && sender === currSelected._id){
         const newMessage = {
           text:msg,
           type: 'text',
@@ -286,10 +299,10 @@ const Home = () => {
         };
         setMessages(prev=>[...prev,newMessage]);
         
-        // INSTANT READ: Since chat is already open, mark as read immediately
-        if(user && socket){
+        // Chat is open — mark as read immediately
+        if(currUser && socket){
           socket.emit("all-read", {
-            currentUserId: user._id,
+            currentUserId: currUser._id,
             selectedUserId: sender
           });
         }
@@ -301,7 +314,7 @@ const Home = () => {
             : u
         ));
       } else {
-        // Update unread count AND last message in sidebar for the sender
+        // Not in this chat — increment badge
         setSidebarUsers(prev => prev.map(u => 
           u._id === sender 
             ? {...u, noofUnreadMessages: (u.noofUnreadMessages || 0) + 1, lastMessage: msg}
@@ -311,12 +324,15 @@ const Home = () => {
     })
     
     return ()=>socket.off("receive");
-  },[socket,selectedUser,user])  
+  },[socket])  
 
   useEffect(()=>{
     if(!socket) return;
     socket.on("receive-image",({sender, imageUrl})=>{
-      if(selectedUser && sender === selectedUser._id){
+      // Use refs — same pattern as receive handler
+      const currSelected = selectedUserRef.current;
+      const currUser = userRef.current;
+      if(currSelected && sender === currSelected._id){
         const newMessage = {
           text: '',
           type: 'image',
@@ -326,8 +342,8 @@ const Home = () => {
           isRead: false
         };
         setMessages(prev=>[...prev, newMessage]);
-        if(user && socket){
-          socket.emit("all-read", { currentUserId: user._id, selectedUserId: sender });
+        if(currUser && socket){
+          socket.emit("all-read", { currentUserId: currUser._id, selectedUserId: sender });
         }
         setSidebarUsers(prev => prev.map(u => 
           u._id === sender ? {...u, lastMessage: '📷 Photo'} : u
@@ -341,7 +357,26 @@ const Home = () => {
       }
     })
     return ()=>socket.off("receive-image");
-  },[socket,selectedUser,user])
+  },[socket])
+
+  // Typing indicator listeners
+  useEffect(() => {
+    if (!socket) return;
+    socket.on('typing', ({ from }) => {
+      setTypingUsers(prev => ({ ...prev, [from]: true }));
+    });
+    socket.on('stop-typing', ({ from }) => {
+      setTypingUsers(prev => {
+        const next = { ...prev };
+        delete next[from];
+        return next;
+      });
+    });
+    return () => {
+      socket.off('typing');
+      socket.off('stop-typing');
+    };
+  }, [socket]);
 
   const handleSendMessage = (e) => {
     e.preventDefault();
@@ -368,6 +403,9 @@ const Home = () => {
 
     // Send via socket
     socket.emit('message', { recId: selectedUser._id, msg: messageInput });
+    // Stop typing indicator when message is sent
+    socket.emit('stop-typing', { to: selectedUser._id });
+    clearTimeout(typingTimeoutRef.current);
 
     setMessageInput('');
   };
@@ -499,6 +537,16 @@ const Home = () => {
             }); 
           }
 
+  // Format sidebar timestamp
+  const formatTime = (date) => {
+    if (!date) return '';
+    const d = new Date(date);
+    const now = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    if (isToday) return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
   return (
     <div className="home-container">
       {/* Voice Call Overlay */}
@@ -537,6 +585,16 @@ const Home = () => {
       {/* Hidden audio element for remote peer's voice */}
       <audio id="remote-audio" ref={remoteAudioRef} autoPlay />
 
+      {/* Image Preview Modal */}
+      {previewImage && (
+        <div className="image-preview-modal" onClick={() => setPreviewImage(null)}>
+          <div className="image-preview-content" onClick={e => e.stopPropagation()}>
+            <button className="close-preview" onClick={() => setPreviewImage(null)}>✕</button>
+            <img src={previewImage} alt="Preview" />
+          </div>
+        </div>
+      )}
+
       {/* Mobile Overlay */}
       {isSidebarOpen && <div className="sidebar-overlay" onClick={toggleSidebar}></div>}
       
@@ -571,13 +629,19 @@ const Home = () => {
           <svg className="search-icon" fill="currentColor" viewBox="0 0 20 20">
             <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
           </svg>
-          <input type="text" placeholder="Search users..." className="search-input" />
+          <input
+            type="text"
+            placeholder="Search users..."
+            className="search-input"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
         </div>
 
         {/* Users List */}
         <div className="users-list">
           <h4 className="list-title">Messages</h4>
-          {sidebarUsers.map(user => (
+          {sidebarUsers.filter(su => su.name?.toLowerCase().includes(searchQuery.toLowerCase())).map(user => (
             <div
               key={user._id}
               className={`user-item ${selectedUser?._id === user._id ? 'active' : ''}`}
@@ -588,7 +652,7 @@ const Home = () => {
               }}
             >
               <div className="user-avatar-container">
-                <div className="user-avatar">{user.avatar}</div>
+                <div className="user-avatar">{user.avatar || user.name?.charAt(0).toUpperCase() || '?'}</div>
                 {user.isOnline && <span className="online-indicator"></span>}
               </div>
               <div className="user-details">
@@ -598,7 +662,7 @@ const Home = () => {
                 </p>
               </div>
               <div className="message-meta">
-                <span className="message-time">12:45</span>
+                <span className="message-time">{user.lastMessageTime ? formatTime(user.lastMessageTime) : ''}</span>
                 {user.noofUnreadMessages > 0 && (
                   <span className="unread-badge">{user.noofUnreadMessages}</span>
                 )}
@@ -621,7 +685,7 @@ const Home = () => {
               </button>
               <div className="chat-user-info">
                 <div className="user-avatar-container">
-                  <div className="user-avatar large">{selectedUser.avatar}</div>
+                  <div className="user-avatar large">{selectedUser.avatar || selectedUser.name?.charAt(0).toUpperCase() || '?'}</div>
                   {selectedUser.isOnline && <span className="online-indicator"></span>}
                 </div>
                 <div>
@@ -659,8 +723,8 @@ const Home = () => {
                   <p>Send a message to start the conversation</p>
                 </div>
               ) : (
-                messages.map((msg, idx) => (
-                  <div key={idx} className={`message ${msg.sender}`}>
+              messages.map((msg, idx) => (
+                  <div key={msg._id || msg._tempId || idx} className={`message ${msg.sender}`}>
                     <div className="message-bubble">
                       {msg.type === 'image' ? (
                         <div className="message-image-wrapper">
@@ -668,7 +732,7 @@ const Home = () => {
                             src={msg.imageUrl} 
                             alt="Sent image" 
                             className={`message-image ${msg.isUploading ? 'uploading' : ''}`}
-                            onClick={() => window.open(msg.imageUrl, '_blank')}
+                            onClick={() => setPreviewImage(msg.imageUrl)}
                           />
                           {msg.isUploading && <div className="image-upload-overlay"><span className="uploading-spinner large" /></div>}
                         </div>
@@ -686,6 +750,15 @@ const Home = () => {
                     </div>
                   </div>
                 ))
+              )}
+              {/* Typing indicator */}
+              {selectedUser && typingUsers[selectedUser._id] && (
+                <div className="typing-indicator">
+                  <span>{selectedUser.name} is typing</span>
+                  <div className="typing-dots">
+                    <span></span><span></span><span></span>
+                  </div>
+                </div>
               )}
               <div ref={messagesEndRef} />
             </div>
@@ -724,7 +797,16 @@ const Home = () => {
                   type="text"
                   placeholder="Type a message..."
                   value={messageInput}
-                  onChange={(e) => setMessageInput(e.target.value)}
+                  onChange={(e) => {
+                    setMessageInput(e.target.value);
+                    if (socket && selectedUser) {
+                      socket.emit('typing', { to: selectedUser._id });
+                      clearTimeout(typingTimeoutRef.current);
+                      typingTimeoutRef.current = setTimeout(() => {
+                        socket.emit('stop-typing', { to: selectedUser._id });
+                      }, 1500);
+                    }
+                  }}
                   className="message-input"
                 />
                 <button type="button" className="emoji-btn" title="Add Emoji" onClick={handleEmojiClick}>
