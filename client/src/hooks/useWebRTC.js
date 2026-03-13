@@ -1,42 +1,54 @@
 import { useRef, useCallback } from 'react';
 
+// TURN server config — use env vars with safe fallbacks
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
     {
-      urls: 'turn:13.61.12.47:3478',
-      username: 'myuser',
-      credential: 'mypassword'
+      urls: import.meta.env.VITE_TURN_URL || 'turn:13.61.12.47:3478',
+      username: import.meta.env.VITE_TURN_USERNAME || 'myuser',
+      credential: import.meta.env.VITE_TURN_CREDENTIAL || 'mypassword'
     }
-  ]
+  ],
+  iceCandidatePoolSize: 10
 };
+
+// How long (ms) to wait for callee to accept before auto-cancelling
+const CALL_TIMEOUT_MS = 45_000;
 
 export const useWebRTC = (socket, userId, selectedUser) => {
   const peerRef = useRef(null);
   const localStreamRef = useRef(null);
   // Queue ICE candidates that arrive before remoteDescription is set
   const iceCandidateQueue = useRef([]);
+  // Auto-cancel timer for unanswered outgoing calls
+  const callTimeoutRef = useRef(null);
 
   const socketRef = useRef(socket);
   const selectedUserRef = useRef(selectedUser);
   socketRef.current = socket;
   selectedUserRef.current = selectedUser;
 
+  // ── Audio playback ────────────────────────────────────────────────────────
+
   const playRemoteStream = (stream) => {
     const audio = document.getElementById('remote-audio');
     if (audio) {
       audio.srcObject = stream;
-      // Resume AudioContext if suspended (browser autoplay policy)
-      audio.play().catch(e => console.warn("Audio autoplay blocked, will play on next interaction:", e));
+      audio.play().catch(e =>
+        console.warn("Remote audio autoplay blocked (will resume on next interaction):", e)
+      );
     }
   };
 
-  const createPeer = useCallback((toId) => {
+  // ── Peer creation ─────────────────────────────────────────────────────────
+
+  const createPeer = useCallback((toId, onConnectionFailed) => {
     const peer = new RTCPeerConnection(ICE_SERVERS);
 
     peer.onicecandidate = (e) => {
       if (e.candidate && socketRef.current) {
-        console.log("Sending ICE candidate to:", toId);
         socketRef.current.emit("ice-candidate", { to: toId, candidate: e.candidate });
       }
     };
@@ -49,7 +61,19 @@ export const useWebRTC = (socket, userId, selectedUser) => {
     };
 
     peer.onconnectionstatechange = () => {
-      console.log("🔗 Peer connection state:", peer.connectionState);
+      const state = peer.connectionState;
+      console.log("🔗 Peer connection state:", state);
+      if (state === 'failed' || state === 'disconnected') {
+        console.warn("Peer connection", state, "— cleaning up");
+        // Notify caller/callee that call ended unexpectedly
+        const sel = selectedUserRef.current;
+        const sock = socketRef.current;
+        if (sock && sel && userId) {
+          sock.emit("end-call", { from: userId, to: sel._id, signalData: {} });
+        }
+        onConnectionFailed?.();
+        cleanUp();
+      }
     };
 
     peer.onicegatheringstatechange = () => {
@@ -61,9 +85,11 @@ export const useWebRTC = (socket, userId, selectedUser) => {
     };
 
     return peer;
-  }, []);
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Flush queued ICE candidates after remoteDescription is set
+  // ── ICE candidate queue ───────────────────────────────────────────────────
+
+  /** Flush queued ICE candidates after remoteDescription is set */
   const flushIceCandidates = useCallback(async () => {
     const peer = peerRef.current;
     if (!peer) return;
@@ -78,7 +104,7 @@ export const useWebRTC = (socket, userId, selectedUser) => {
     iceCandidateQueue.current = [];
   }, []);
 
-  // Add ICE candidate — queue it if remote description not set yet
+  /** Add ICE candidate — queue it if remote description not set yet */
   const addIceCandidate = useCallback(async (candidate) => {
     const peer = peerRef.current;
     if (!peer) return;
@@ -96,19 +122,44 @@ export const useWebRTC = (socket, userId, selectedUser) => {
     }
   }, []);
 
-  // Called by CALLER after call-accepted
-  const makeCall = useCallback(async () => {
+  // ── Call timeout ──────────────────────────────────────────────────────────
+
+  /** Start the 45-second auto-cancel timer for unanswered outgoing calls */
+  const startCallTimeout = useCallback((onTimeout) => {
+    clearCallTimeout();
+    callTimeoutRef.current = setTimeout(() => {
+      console.log("⏰ Call timed out — auto-cancelling");
+      const sel = selectedUserRef.current;
+      const sock = socketRef.current;
+      if (sock && sel) {
+        sock.emit("call-timeout", { from: userId, to: sel._id });
+      }
+      onTimeout?.();
+    }, CALL_TIMEOUT_MS);
+  }, [userId]);
+
+  const clearCallTimeout = useCallback(() => {
+    if (callTimeoutRef.current) {
+      clearTimeout(callTimeoutRef.current);
+      callTimeoutRef.current = null;
+    }
+  }, []);
+
+  // ── WebRTC flows ──────────────────────────────────────────────────────────
+
+  /** Called by CALLER after call-accepted */
+  const makeCall = useCallback(async (onConnectionFailed) => {
     const sel = selectedUserRef.current;
     const sock = socketRef.current;
     if (!sock || !sel) return;
 
-    iceCandidateQueue.current = []; // Reset queue
+    iceCandidateQueue.current = [];
     console.log("makeCall() — getting mic, creating offer");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       localStreamRef.current = stream;
 
-      const peer = createPeer(sel._id);
+      const peer = createPeer(sel._id, onConnectionFailed);
       peerRef.current = peer;
 
       stream.getTracks().forEach(track => peer.addTrack(track, stream));
@@ -122,18 +173,18 @@ export const useWebRTC = (socket, userId, selectedUser) => {
     }
   }, [createPeer]);
 
-  // Called by RECEIVER when webrtc-offer arrives
-  const answerCall = useCallback(async (fromId, offer) => {
+  /** Called by RECEIVER when webrtc-offer arrives */
+  const answerCall = useCallback(async (fromId, offer, onConnectionFailed) => {
     const sock = socketRef.current;
     if (!sock) return;
 
-    iceCandidateQueue.current = []; // Reset queue
+    iceCandidateQueue.current = [];
     console.log("answerCall() — getting mic, creating answer");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       localStreamRef.current = stream;
 
-      const peer = createPeer(fromId);
+      const peer = createPeer(fromId, onConnectionFailed);
       peerRef.current = peer;
 
       stream.getTracks().forEach(track => peer.addTrack(track, stream));
@@ -157,8 +208,9 @@ export const useWebRTC = (socket, userId, selectedUser) => {
     if (sock && sel) {
       sock.emit("end-call", { from: userId, to: sel._id, signalData: {} });
     }
+    clearCallTimeout();
     cleanUp();
-  }, [userId]);
+  }, [userId, clearCallTimeout]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cleanUp = useCallback(() => {
     peerRef.current?.close();
@@ -166,10 +218,23 @@ export const useWebRTC = (socket, userId, selectedUser) => {
     localStreamRef.current?.getTracks().forEach(t => t.stop());
     localStreamRef.current = null;
     iceCandidateQueue.current = [];
+    clearCallTimeout();
     const audio = document.getElementById('remote-audio');
     if (audio) { audio.srcObject = null; }
-    console.log("WebRTC cleaned up");
-  }, []);
+    console.log("WebRTC cleaned up ✅");
+  }, [clearCallTimeout]);
 
-  return { makeCall, answerCall, stopCall, cleanUp, addIceCandidate, peerRef, localStreamRef };
+  return {
+    makeCall,
+    answerCall,
+    stopCall,
+    cleanUp,
+    addIceCandidate,
+    flushIceCandidates,
+    startCallTimeout,
+    clearCallTimeout,
+    peerRef,
+    localStreamRef,
+    CALL_TIMEOUT_MS
+  };
 };

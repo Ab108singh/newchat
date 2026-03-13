@@ -13,16 +13,21 @@ import { useWebRTC } from '../hooks/useWebRTC';
 const Home = () => {
   const navigate = useNavigate();
   const { user, logout } = useContext(AuthContext);
-  const [users, setUsers] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
   const [messages, setMessages] = useState([]);
   const [messageInput, setMessageInput] = useState('');
   const messagesEndRef = useRef(null);
-  const [conversations, setConversations] = useState([]);
   const [sidebarUsers, setSidebarUsers] = useState([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const emojiPickerRef = useRef(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth <= 768);
+  // New Chat search
+  const [showNewChat, setShowNewChat] = useState(false);
+  const [newChatQuery, setNewChatQuery] = useState('');
+  const [newChatResults, setNewChatResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const newChatInputRef = useRef(null);
+  // Call state
   const [showMakeCall, setShowMakeCall] = useState(false);
   const [callComming, setCallComming] = useState(false);
   const [incomingCaller, setIncomingCaller] = useState(null);
@@ -34,7 +39,7 @@ const Home = () => {
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const typingTimeoutRef = useRef(null);
   const [typingUsers, setTypingUsers] = useState({});
-  const [searchQuery, setSearchQuery] = useState('');
+  const [contactSearch, setContactSearch] = useState('');
   const [previewImage, setPreviewImage] = useState(null);
   // Refs so socket handlers always read the LATEST state without re-registering
   const selectedUserRef = useRef(null);
@@ -43,17 +48,18 @@ const Home = () => {
   userRef.current = user;
 
  const socket = useContext(SocketContext);
- const { makeCall, answerCall, stopCall, cleanUp, addIceCandidate, peerRef, localStreamRef } = useWebRTC(socket, user?._id, selectedUser);
+ const { makeCall, answerCall, stopCall, cleanUp, addIceCandidate, flushIceCandidates, startCallTimeout, clearCallTimeout, peerRef, localStreamRef } = useWebRTC(socket, user?._id, selectedUser);
 
  useEffect(()=>{
   if(!socket) return;
   socket.on("call-accepted",()=>{
     console.log("call-accepted — caller starting WebRTC offer");
+    clearCallTimeout(); // Stop the 45-second ringing timer
     setCallComming(false);  
     setShowMakeCall(false);
     setCallConnected(true);
     // Caller sends WebRTC offer now that receiver accepted
-    makeCall();
+    makeCall(() => { setCallConnected(false); setIncomingCaller(null); });
   })
   return ()=> socket.off("call-accepted");
  },[socket])
@@ -76,11 +82,9 @@ const Home = () => {
     console.log("webrtc-answer received");
     if(peerRef.current){
       await peerRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-      console.log("Remote description set ✅ — now flushing queued ICE candidates");
-      // Flush any candidates that arrived before the answer was set
-      for (const candidate of (peerRef.current._iceCandidateQueue || [])) {
-        await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
-      }
+      console.log("Remote description set ✅ — flushing queued ICE candidates");
+      // Use the hook's flush helper (manages the internal queue correctly)
+      await flushIceCandidates();
     }
   });
   return ()=> socket.off("webrtc-answer");
@@ -106,10 +110,12 @@ const Home = () => {
   if(!socket) return;
   socket.on("call-declined",({from,to})=>{
     console.log("call-declined",from,to);
+    clearCallTimeout();
     setCallComming(false);  
     setShowMakeCall(false);
     setIncomingCaller(null);
     setCallConnected(false);
+    cleanUp();
   })
   return ()=> socket.off("call-declined");
  },[socket])
@@ -131,13 +137,26 @@ const Home = () => {
 
  useEffect(()=>{
   if(!socket) return;
-  socket.on("end-call",({user,signalData})=>{
-    console.log("end-call",user,signalData);
+  socket.on("end-call",({from,signalData})=>{
+    console.log("end-call from:", from);
     setCallComming(false);  
     setCallConnected(false);
+    setShowMakeCall(false);
+    setIncomingCaller(null);
+    cleanUp(); // Stop mic tracks and close peer connection
   })
-  // BUG-11: Added missing cleanup to prevent listener accumulation
   return ()=>socket.off("end-call");
+ },[socket])
+
+ // Remote caller timed out / cancelled before we picked up
+ useEffect(()=>{
+  if(!socket) return;
+  socket.on("call-timeout",({from})=>{
+    console.log("call-timeout from:", from);
+    setCallComming(false);
+    setIncomingCaller(null);
+  })
+  return ()=>socket.off("call-timeout");
  },[socket])
 
 
@@ -181,46 +200,30 @@ const Home = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  useEffect(()=>{
-    if(!socket || !user || users.length === 0) return; // ✅ Wait for users to load
-    
-    // Fetch conversations for current user
-    axios.get(`${import.meta.env.VITE_API_URL}/conversation/conversations/${user._id}`,{
-      withCredentials:true
-    }).then((res)=>{
-      console.log(res.data);
-     
-      let sidebarUsers = users.map(u => {
-          const conv = res.data.find(conversation => conversation.participants.includes(u._id));
-          if(conv){
-            // Extract the current user's unread count from the Map
-            const unreadCount = conv.unreadCount?.[user._id] || 0;
-            return {
-              ...u,
-              lastMessage: conv.lastMessage,
-              noofUnreadMessages: unreadCount
-            }
-          }
-          else{
-            return u
-          }
-      })
-      setSidebarUsers(sidebarUsers);
-    }).catch((err)=>{
-      console.log(err);
-      setConversations([]); // Set empty array on error
-    })
-  }, [socket, user, users]) // ✅ Added users to dependencies
+  // ── Load sidebar contacts (only users with existing conversations) ──────────
+  const loadContacts = () => {
+    if (!user) return;
+    axios.get(`${import.meta.env.VITE_API_URL}/user/users`, {
+      params: { userId: user._id },
+      withCredentials: true
+    }).then((res) => {
+      // Server already returns users enriched with lastMessage + unreadCount
+      setSidebarUsers(res.data.users || []);
+    }).catch(err => console.error('loadContacts error:', err));
+  };
 
+  useEffect(() => {
+    if (socket && user) loadContacts();
+  }, [socket, user]); // eslint-disable-line react-hooks/exhaustive-deps
+
+
+  // ── Fetch messages when a chat is opened ─────────────────────────────────
   useEffect(()=>{
     if(!socket || !selectedUser || !user) return;
-    
-    // Fetch messages between current user and selected user
     axios.get(`${import.meta.env.VITE_API_URL}/message/messages/${selectedUser._id}`,{
       params: { userId: user._id },
       withCredentials:true
     }).then((res)=>{
-      // Transform messages to match UI format
       const formattedMessages = res.data.map(msg => ({
         text: msg.message,
         type: msg.messageType || 'text',
@@ -229,43 +232,39 @@ const Home = () => {
         timestamp: new Date(msg.createdAt),
         isRead: msg.isRead || false
       }));
-      console.log(formattedMessages);
       setMessages(formattedMessages);
     }).catch((err)=>{
       console.log(err);
-      setMessages([]); // Set empty array on error
-    })  
-   
+      setMessages([]);
+    })
   },[selectedUser, socket, user])
 
-  // Mock users data - Replace with actual API call
+  // ── New Chat: search users by username ───────────────────────────────────
   useEffect(() => {
-    axios.get(`${import.meta.env.VITE_API_URL}/user/users`,{
-      withCredentials:true
-    }).then((res)=>{
-      setUsers(res.data.users.filter(u => u._id !== user._id));
-    }).catch((err)=>{
-      console.log(err);
-    })
-  }, []);
+    if (!showNewChat) { setNewChatResults([]); return; }
+    // Focus the input when panel opens
+    setTimeout(() => newChatInputRef.current?.focus(), 50);
+  }, [showNewChat]);
 
-  useEffect(()=>{
-    if(!socket) return;
-    socket.on("user-joined",(newUser)=>{
-      console.log("User joined:",newUser);
-      setUsers(prev=>[...prev,newUser]);
-    })
-    return ()=>socket.off("user-joined");
-  }, [socket])
+  useEffect(() => {
+    if (!newChatQuery.trim() || !user) { setNewChatResults([]); return; }
+    const timer = setTimeout(() => {
+      setIsSearching(true);
+      axios.get(`${import.meta.env.VITE_API_URL}/user/search`, {
+        params: { q: newChatQuery.trim(), userId: user._id },
+        withCredentials: true
+      }).then(res => {
+        setNewChatResults(res.data.users || []);
+      }).catch(() => setNewChatResults([]))
+        .finally(() => setIsSearching(false));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [newChatQuery, user]);
 
   useEffect(()=>{
     if(!socket) return;
     socket.on("user-online",({userId,isOnline})=>{
-      console.log("User online:",userId,isOnline);
-      // Update the users array to reflect online status
-      setUsers(prev => prev.map(u => 
-        u._id === userId ? {...u, isOnline} : u
-      ));
+      setSidebarUsers(prev => prev.map(u => u._id === userId ? {...u, isOnline} : u));
     })
     return ()=>socket.off("user-online");
   }, [socket])
@@ -273,11 +272,7 @@ const Home = () => {
   useEffect(()=>{
     if(!socket) return;
     socket.on("user-offline",({userId,isOnline})=>{
-      console.log("User offline:",userId,isOnline);
-      // Update the users array to reflect offline status
-      setUsers(prev => prev.map(u => 
-        u._id === userId ? {...u, isOnline} : u
-      ));
+      setSidebarUsers(prev => prev.map(u => u._id === userId ? {...u, isOnline} : u));
     })
     return ()=>socket.off("user-offline");
   }, [socket])
@@ -285,75 +280,113 @@ const Home = () => {
   useEffect(()=>{
     if(!socket) return;
     socket.on("receive",({sender,msg})=>{
-      // Use refs to avoid stale closure — listener never re-registers on selectedUser change
       const currSelected = selectedUserRef.current;
       const currUser = userRef.current;
+
+      // Helper: ensure sender is in sidebar (add them if first-ever message)
+      const ensureInSidebar = (lastMessage, unreadDelta) => {
+        setSidebarUsers(prev => {
+          const idx = prev.findIndex(u => u._id === sender);
+          if (idx !== -1) {
+            // Already exists — update
+            return prev.map(u => u._id === sender
+              ? { ...u, lastMessage, noofUnreadMessages: (u.noofUnreadMessages || 0) + unreadDelta }
+              : u
+            );
+          }
+          // Not found — fetch user info then prepend
+          if (currUser) {
+            axios.get(`${import.meta.env.VITE_API_URL}/user/search`, {
+              params: { q: sender, userId: currUser._id },
+              withCredentials: true
+            }).catch(() => {});
+            // Optimistic: use id only; loadContacts will fill it properly
+            // We trigger a reload instead
+            setTimeout(() => {
+              if (currUser) {
+                axios.get(`${import.meta.env.VITE_API_URL}/user/users`, {
+                  params: { userId: currUser._id },
+                  withCredentials: true
+                }).then(res => {
+                  const newContact = res.data.users.find(u => u._id === sender);
+                  if (newContact) {
+                    setSidebarUsers(p => {
+                      if (p.some(u => u._id === sender)) return p;
+                      return [{ ...newContact, lastMessage, noofUnreadMessages: 1 }, ...p];
+                    });
+                  }
+                }).catch(() => {});
+              }
+            }, 400);
+          }
+          return prev;
+        });
+      };
+
       if(currSelected && sender === currSelected._id){
         const newMessage = {
-          text:msg,
-          type: 'text',
-          imageUrl: null,
-          sender:'them',
-          timestamp:new Date(),
-          isRead: false
+          text: msg, type: 'text', imageUrl: null,
+          sender: 'them', timestamp: new Date(), isRead: false
         };
         setMessages(prev=>[...prev,newMessage]);
-        
-        // Chat is open — mark as read immediately
         if(currUser && socket){
-          socket.emit("all-read", {
-            currentUserId: currUser._id,
-            selectedUserId: sender
-          });
+          socket.emit("all-read", { currentUserId: currUser._id, selectedUserId: sender });
         }
-        
-        // Update last message in sidebar
-        setSidebarUsers(prev => prev.map(u => 
-          u._id === sender 
-            ? {...u, lastMessage: msg}
-            : u
-        ));
+        ensureInSidebar(msg, 0);
       } else {
-        // Not in this chat — increment badge
-        setSidebarUsers(prev => prev.map(u => 
-          u._id === sender 
-            ? {...u, noofUnreadMessages: (u.noofUnreadMessages || 0) + 1, lastMessage: msg}
-            : u
-        ));
+        ensureInSidebar(msg, 1);
       }
     })
-    
     return ()=>socket.off("receive");
   },[socket])  
 
   useEffect(()=>{
     if(!socket) return;
     socket.on("receive-image",({sender, imageUrl})=>{
-      // Use refs — same pattern as receive handler
       const currSelected = selectedUserRef.current;
       const currUser = userRef.current;
+
+      const ensureInSidebarImg = (lastMessage, unreadDelta) => {
+        setSidebarUsers(prev => {
+          const idx = prev.findIndex(u => u._id === sender);
+          if (idx !== -1) {
+            return prev.map(u => u._id === sender
+              ? { ...u, lastMessage, noofUnreadMessages: (u.noofUnreadMessages || 0) + unreadDelta }
+              : u
+            );
+          }
+          if (currUser) {
+            setTimeout(() => {
+              axios.get(`${import.meta.env.VITE_API_URL}/user/users`, {
+                params: { userId: currUser._id },
+                withCredentials: true
+              }).then(res => {
+                const newContact = res.data.users.find(u => u._id === sender);
+                if (newContact) {
+                  setSidebarUsers(p => {
+                    if (p.some(u => u._id === sender)) return p;
+                    return [{ ...newContact, lastMessage, noofUnreadMessages: 1 }, ...p];
+                  });
+                }
+              }).catch(() => {});
+            }, 400);
+          }
+          return prev;
+        });
+      };
+
       if(currSelected && sender === currSelected._id){
         const newMessage = {
-          text: '',
-          type: 'image',
-          imageUrl,
-          sender: 'them',
-          timestamp: new Date(),
-          isRead: false
+          text: '', type: 'image', imageUrl,
+          sender: 'them', timestamp: new Date(), isRead: false
         };
         setMessages(prev=>[...prev, newMessage]);
         if(currUser && socket){
           socket.emit("all-read", { currentUserId: currUser._id, selectedUserId: sender });
         }
-        setSidebarUsers(prev => prev.map(u => 
-          u._id === sender ? {...u, lastMessage: '📷 Photo'} : u
-        ));
+        ensureInSidebarImg('📷 Photo', 0);
       } else {
-        setSidebarUsers(prev => prev.map(u => 
-          u._id === sender 
-            ? {...u, noofUnreadMessages: (u.noofUnreadMessages || 0) + 1, lastMessage: '📷 Photo'}
-            : u
-        ));
+        ensureInSidebarImg('📷 Photo', 1);
       }
     })
     return ()=>socket.off("receive-image");
@@ -391,15 +424,18 @@ const Home = () => {
       isRead: false
     };
 
-    // Add to local messages
     setMessages(prev => [...prev, newMessage]);
 
-    // Update last message in sidebar for selected user
-    setSidebarUsers(prev => prev.map(u => 
-      u._id === selectedUser._id 
-        ? {...u, lastMessage: messageInput}
-        : u
-    ));
+    // If this user isn't in the sidebar yet (first message), add them
+    setSidebarUsers(prev => {
+      const exists = prev.some(u => u._id === selectedUser._id);
+      if (!exists) {
+        return [{ ...selectedUser, lastMessage: messageInput, noofUnreadMessages: 0 }, ...prev];
+      }
+      return prev.map(u =>
+        u._id === selectedUser._id ? { ...u, lastMessage: messageInput } : u
+      );
+    });
 
     // Send via socket
     socket.emit('message', { recId: selectedUser._id, msg: messageInput });
@@ -517,24 +553,24 @@ const Home = () => {
   
 
      const onAccept = () => {
+            if (!incomingCaller) return;
             setCallComming(false);
             setCallConnected(true);
-
             socket.emit("call-accepted", {
               from: user._id,
               to: incomingCaller._id
             });
-            // answerCall is handled in webrtc-offer handler when the offer arrives
+            // answerCall is triggered when the webrtc-offer arrives (see listener above)
           }
 
      const onDecline = () => {
+            if (!incomingCaller) return; // null-guard
             setCallComming(false);
             setIncomingCaller(null);
-
             socket.emit("call-declined", {
               from: user._id,
               to: incomingCaller._id
-            }); 
+            });
           }
 
   // Format sidebar timestamp
@@ -552,7 +588,13 @@ const Home = () => {
       {/* Voice Call Overlay */}
       {showMakeCall && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 9999 }}>
-          <MakeCall onClose={() => setShowMakeCall(false)} selectedUser={selectedUser} />
+          <MakeCall
+            onClose={() => {
+              clearCallTimeout();
+              setShowMakeCall(false);
+            }}
+            selectedUser={selectedUser}
+          />
         </div>
       )}
 
@@ -572,7 +614,8 @@ const Home = () => {
           callerName={incomingCaller?.name || selectedUser?.name}
           callerAvatar={incomingCaller?.avatar || selectedUser?.avatar}
           onHangup={() => {
-            socket.emit('end-call', { from: user._id, to: incomingCaller?._id || selectedUser?._id, signalData: {} });
+            const toId = incomingCaller?._id || selectedUser?._id;
+            if (toId) socket.emit('end-call', { from: user._id, to: toId, signalData: {} });
             setCallConnected(false);
             setIncomingCaller(null);
             setIncomingOffer(null);
@@ -580,6 +623,7 @@ const Home = () => {
             cleanUp();
           }}
           localStream={localStreamRef.current}
+          peerRef={peerRef}
         />
       )}
       {/* Hidden audio element for remote peer's voice */}
@@ -614,7 +658,7 @@ const Home = () => {
             <h3>{user?.name || 'User'}</h3>
             <p className="user-status">
               <span className="status-dot online"></span>
-              Online
+              {user?.username ? `@${user.username}` : 'Online'}
             </p>
           </div>
           <button className="logout-btn" onClick={handleLogout} title="Logout">
@@ -624,51 +668,135 @@ const Home = () => {
           </button>
         </div>
 
-        {/* Search Bar */}
+        {/* Contact filter */}
         <div className="search-container">
           <svg className="search-icon" fill="currentColor" viewBox="0 0 20 20">
             <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
           </svg>
           <input
             type="text"
-            placeholder="Search users..."
+            placeholder="Filter chats..."
             className="search-input"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            value={contactSearch}
+            onChange={(e) => setContactSearch(e.target.value)}
           />
         </div>
 
         {/* Users List */}
         <div className="users-list">
-          <h4 className="list-title">Messages</h4>
-          {sidebarUsers.filter(su => su.name?.toLowerCase().includes(searchQuery.toLowerCase())).map(user => (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px' }}>
+            <h4 className="list-title" style={{ margin: 0 }}>Messages</h4>
+            <button
+              title="Start new chat"
+              onClick={() => { setShowNewChat(v => !v); setNewChatQuery(''); }}
+              style={{
+                background: showNewChat ? 'rgba(99,102,241,0.2)' : 'transparent',
+                border: 'none', borderRadius: '8px', padding: '6px 8px',
+                cursor: 'pointer', color: showNewChat ? '#818cf8' : '#6b7280',
+                display: 'flex', alignItems: 'center', gap: '4px',
+                fontSize: '12px', fontWeight: 500, transition: 'all 0.15s ease'
+              }}
+            >
+              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+              New Chat
+            </button>
+          </div>
+
+          {/* ── New Chat Search Panel ── */}
+          {showNewChat && (
+            <div className="new-chat-panel">
+              <div className="new-chat-search-wrapper">
+                <span className="new-chat-at">@</span>
+                <input
+                  ref={newChatInputRef}
+                  type="text"
+                  placeholder="Search by username…"
+                  className="new-chat-input"
+                  value={newChatQuery}
+                  onChange={e => setNewChatQuery(e.target.value)}
+                  spellCheck="false"
+                  autoComplete="off"
+                />
+                {newChatQuery && (
+                  <button className="new-chat-clear" onClick={() => setNewChatQuery('')}>✕</button>
+                )}
+              </div>
+
+              <div className="new-chat-results">
+                {isSearching && (
+                  <div className="new-chat-status">Searching…</div>
+                )}
+                {!isSearching && newChatQuery && newChatResults.length === 0 && (
+                  <div className="new-chat-status">No users found</div>
+                )}
+                {!isSearching && newChatResults.map(u => (
+                  <div
+                    key={u._id}
+                    className="new-chat-result-item"
+                    onClick={() => {
+                      setSelectedUser(u);
+                      setMessages([]);
+                      setShowNewChat(false);
+                      setNewChatQuery('');
+                      setIsSidebarOpen(false);
+                    }}
+                  >
+                    <div className="user-avatar-container">
+                      <div className="user-avatar">{u.avatar || u.name?.charAt(0).toUpperCase() || '?'}</div>
+                      {u.isOnline && <span className="online-indicator"></span>}
+                    </div>
+                    <div className="user-details">
+                      <h5>{u.name}</h5>
+                      <p className="last-message">@{u.username}</p>
+                    </div>
+                    <svg width="14" height="14" fill="none" stroke="#818cf8" strokeWidth="2" viewBox="0 0 24 24" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M5 12h14M12 5l7 7-7 7"/>
+                    </svg>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Existing contacts ── */}
+          {sidebarUsers.filter(su => su.name?.toLowerCase().includes(contactSearch.toLowerCase()) || su.username?.toLowerCase().includes(contactSearch.toLowerCase())).map(u => (
             <div
-              key={user._id}
-              className={`user-item ${selectedUser?._id === user._id ? 'active' : ''}`}
+              key={u._id}
+              className={`user-item ${selectedUser?._id === u._id ? 'active' : ''}`}
               onClick={() => {
-                setSelectedUser(user);
+                setSelectedUser(u);
                 setMessages([]);
-                setIsSidebarOpen(false); // Close sidebar on mobile after selecting user
+                setIsSidebarOpen(false);
               }}
             >
               <div className="user-avatar-container">
-                <div className="user-avatar">{user.avatar || user.name?.charAt(0).toUpperCase() || '?'}</div>
-                {user.isOnline && <span className="online-indicator"></span>}
+                <div className="user-avatar">{u.avatar || u.name?.charAt(0).toUpperCase() || '?'}</div>
+                {u.isOnline && <span className="online-indicator"></span>}
               </div>
               <div className="user-details">
-                <h5>{user.name}</h5>
+                <h5>{u.name}</h5>
                 <p className="last-message">
-                  {user.lastMessage ? user.lastMessage : (user.isOnline ? 'Online' : 'Offline')}
+                  {u.lastMessage ? u.lastMessage : (u.isOnline ? '🟢 Online' : `@${u.username || ''}`)}
                 </p>
               </div>
               <div className="message-meta">
-                <span className="message-time">{user.lastMessageTime ? formatTime(user.lastMessageTime) : ''}</span>
-                {user.noofUnreadMessages > 0 && (
-                  <span className="unread-badge">{user.noofUnreadMessages}</span>
+                <span className="message-time">{u.lastMessageTime ? formatTime(u.lastMessageTime) : ''}</span>
+                {u.noofUnreadMessages > 0 && (
+                  <span className="unread-badge">{u.noofUnreadMessages}</span>
                 )}
               </div>
             </div>
           ))}
+
+          {sidebarUsers.length === 0 && !showNewChat && (
+            <div style={{ textAlign: 'center', padding: '32px 16px', color: '#4b5563' }}>
+              <div style={{ fontSize: '36px', marginBottom: '12px' }}>💬</div>
+              <p style={{ fontSize: '14px', marginBottom: '6px', color: '#6b7280' }}>No chats yet</p>
+              <p style={{ fontSize: '12px', color: '#4b5563' }}>Click <strong>New Chat</strong> to find someone</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -696,7 +824,7 @@ const Home = () => {
                 </div>
               </div>
               <div className="chat-actions">
-                <button className="action-btn" title="Voice Call" onClick={() => setShowMakeCall(true)}>
+                <button className="action-btn" title="Voice Call" onClick={() => { setShowMakeCall(true); startCallTimeout(() => setShowMakeCall(false)); }}>
                   <svg fill="currentColor" viewBox="0 0 20 20">
                     <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
                   </svg>

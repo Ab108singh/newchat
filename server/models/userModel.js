@@ -8,6 +8,17 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
 
+    username: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+      minlength: 3,
+      maxlength: 30,
+      match: [/^[a-z0-9_]+$/, "Username can only contain letters, numbers, and underscores"],
+    },
+
     email: {
       type: String,
       required: true,
@@ -19,11 +30,11 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
       minlength: 6,
-      select: false, // hide password by default
+      select: false,
     },
 
     avatar: {
-      type: String, // store image URL (Cloudinary / S3)
+      type: String,
       default: "",
     },
 
@@ -59,6 +70,6 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
- const User = mongoose.model("User", userSchema);
+const User = mongoose.model("User", userSchema);
 
- module.exports = User
+module.exports = User;
