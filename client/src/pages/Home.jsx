@@ -653,6 +653,37 @@ const Home = () => {
     });
   };
 
+  // Delete for me — adds userId to message's deletedFor array; other user still sees it
+  const handleDeleteForMe = async (explicitIds) => {
+    const ids = explicitIds
+      ? (Array.isArray(explicitIds) ? explicitIds : [explicitIds])
+      : [...selectedMsgs].filter(id => id && id !== 'null');
+    if (!user || ids.length === 0) { exitMsgSelection(); return; }
+
+    // Optimistic: remove from local view + update sidebar last message
+    const idsSet = new Set(ids.map(String));
+    const remaining = messages.filter(m => !m._id || !idsSet.has(String(m._id)));
+    const lastRemaining = remaining.filter(m => m._id).slice(-1)[0];
+    setMessages(remaining);
+    if (selectedUser) {
+      setSidebarUsers(prev => prev.map(u =>
+        u._id === selectedUser._id
+          ? { ...u, lastMessage: lastRemaining ? (lastRemaining.type === 'image' ? '📷 Photo' : lastRemaining.text) : '' }
+          : u
+      ));
+    }
+    exitMsgSelection();
+
+    // Persist to server in background
+    try {
+      await axios.patch(`${import.meta.env.VITE_API_URL}/message/delete-for-me`, {
+        messageIds: ids, userId: user._id
+      }, { withCredentials: true });
+    } catch (err) {
+      console.error('Delete for me failed:', err);
+    }
+  };
+
   const handleDeleteMessages = async () => {
     if (!user || !selectedUser || selectedMsgs.size === 0) return;
     // Only include messages that have a real DB _id (exclude pending optimistic ones)
@@ -1070,7 +1101,6 @@ const Home = () => {
             {/* Chat Header — shows selection toolbar when in msgSelectionMode */}
             <div className="chat-header">
               {msgSelectionMode ? (
-                /* ── Message selection toolbar ── */
                 <div className="msg-selection-toolbar">
                   <button className="msg-sel-cancel" onClick={exitMsgSelection} title="Cancel">
                     <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1079,19 +1109,34 @@ const Home = () => {
                   <span className="msg-sel-count">
                     {selectedMsgs.size} selected
                   </span>
-                  <button
-                    className="msg-sel-delete"
-                    onClick={handleDeleteMessages}
-                    disabled={selectedMsgs.size === 0}
-                  >
-                    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                      <polyline points="3 6 5 6 21 6"/>
-                      <path d="M19 6l-1 14H6L5 6"/>
-                      <path d="M10 11v6M14 11v6"/>
-                      <path d="M9 6V4h6v2"/>
-                    </svg>
-                    Delete
-                  </button>
+                  <div className="msg-sel-actions">
+                    {/* Delete for me — always available */}
+                    <button
+                      className="msg-sel-delete for-me"
+                      onClick={() => handleDeleteForMe()}
+                      disabled={selectedMsgs.size === 0}
+                      title="Delete for me"
+                    >
+                      <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+                      </svg>
+                      For Me
+                    </button>
+                    {/* Delete for everyone — only when at least one OWN message is selected */}
+                    {[...selectedMsgs].some(id => messages.find(m => String(m._id) === String(id) && m.sender === 'me')) && (
+                      <button
+                        className="msg-sel-delete for-everyone"
+                        onClick={() => handleDeleteMessages()}
+                        disabled={selectedMsgs.size === 0}
+                        title="Delete for everyone"
+                      >
+                        <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+                        </svg>
+                        Everyone
+                      </button>
+                    )}
+                  </div>
                 </div>
               ) : (
                 /* ── Normal header ── */
@@ -1162,12 +1207,21 @@ const Home = () => {
                       </div>
                     )}
                     <div className="message-bubble-wrapper">
-                      {/* ⋮ context button — only on 'me' messages that have a real _id */}
-                      {!msgSelectionMode && msg.sender === 'me' && msg._id && (
+                      {/* ⋮ context button — shown on hover for ALL messages with a real _id */}
+                      {!msgSelectionMode && msg._id && (
                         <button
                           className="msg-context-btn"
-                          title="Select message"
-                          onClick={e => { e.stopPropagation(); enterMsgSelectionWith(msg._id); }}
+                          title={msg.sender === 'me' ? 'Message options' : 'Delete for me'}
+                          onClick={e => {
+                            e.stopPropagation();
+                            if (msg.sender === 'me') {
+                              // Own message: enter selection mode so user picks delete type in toolbar
+                              enterMsgSelectionWith(msg._id);
+                            } else {
+                              // Received message: enter selection mode (toolbar shows only "For Me")
+                              enterMsgSelectionWith(msg._id);
+                            }
+                          }}
                         >
                           ⋮
                         </button>

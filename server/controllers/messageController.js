@@ -37,9 +37,11 @@ const getMessages = async(req,res)=>{
             return res.status(200).json([]);
         }
         
-        // Fetch all messages for this conversation
-        const messages = await Message.find({conversation: conversation._id})
-            .sort({createdAt: 1}); // Sort by oldest first
+        // Fetch all messages for this conversation, excluding ones deleted for this user
+        const messages = await Message.find({
+            conversation: conversation._id,
+            deletedFor: { $nin: [userId] }   // exclude msgs this user deleted for themselves
+        }).sort({createdAt: 1});
             
         res.status(200).json(messages);
     } catch (error) {
@@ -86,4 +88,24 @@ const deleteMessages = async (req, res) => {
     }
 };
 
-module.exports = {createMessage, getMessages, deleteMessages};
+// PATCH /api/message/delete-for-me
+// Body: { messageIds: string[], userId: string }
+const deleteForMe = async (req, res) => {
+    try {
+        const { messageIds, userId } = req.body;
+        if (!messageIds || !Array.isArray(messageIds) || messageIds.length === 0) {
+            return res.status(400).json({ message: "messageIds array is required" });
+        }
+        // Push userId into deletedFor for each message — message stays in DB for the other user
+        await Message.updateMany(
+            { _id: { $in: messageIds } },
+            { $addToSet: { deletedFor: userId } }
+        );
+        res.status(200).json({ message: "Messages hidden", messageIds });
+    } catch (error) {
+        console.error("deleteForMe error:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+module.exports = {createMessage, getMessages, deleteMessages, deleteForMe};

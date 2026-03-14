@@ -7,7 +7,8 @@ const chatSchema = new mongoose.Schema({
     messageType:{type:String,enum:['text','image'],default:'text'},
     imageUrl:{type:String,default:null},
     conversation:{type:mongoose.Schema.Types.ObjectId,ref:"Conversation"},
-    isRead:{type:Boolean,default:false}
+    isRead:{type:Boolean,default:false},
+    deletedFor:[{type:mongoose.Schema.Types.ObjectId,ref:"User"}]
 },{timestamps:true})
 
 const Message = mongoose.model("Message",chatSchema);

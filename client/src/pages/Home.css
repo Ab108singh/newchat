@@ -1399,3 +1399,38 @@
   cursor: not-allowed;
   box-shadow: none;
 }
+
+/* Container for the two delete action buttons */
+.msg-sel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* "Delete for me" — muted secondary style */
+.msg-sel-delete.for-me {
+  background: var(--bg-hover, rgba(99,102,241,0.12));
+  color: var(--text-primary);
+  box-shadow: none;
+  border: 1px solid var(--border-subtle);
+}
+
+.msg-sel-delete.for-me:hover:not(:disabled) {
+  background: rgba(99,102,241,0.2);
+  color: var(--accent-primary);
+  border-color: var(--border-accent);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99,102,241,0.2);
+}
+
+/* "Delete for everyone" — red danger style (inherits base) */
+.msg-sel-delete.for-everyone {
+  background: var(--red, #ef4444);
+  box-shadow: 0 4px 14px rgba(239,68,68,0.35);
+}
+
+.msg-sel-delete.for-everyone:hover:not(:disabled) {
+  background: #dc2626;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(239,68,68,0.45);
+}
