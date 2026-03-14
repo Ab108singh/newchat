@@ -43,6 +43,12 @@ const Home = () => {
   const [typingUsers, setTypingUsers] = useState({});
   const [contactSearch, setContactSearch] = useState('');
   const [previewImage, setPreviewImage] = useState(null);
+  // Selection / delete state (chats)
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedChats, setSelectedChats] = useState(new Set());
+  // Selection / delete state (messages)
+  const [msgSelectionMode, setMsgSelectionMode] = useState(false);
+  const [selectedMsgs, setSelectedMsgs] = useState(new Set());
   // Refs so socket handlers always read the LATEST state without re-registering
   const selectedUserRef = useRef(null);
   const userRef = useRef(null);
@@ -222,11 +228,15 @@ const Home = () => {
   // ── Fetch messages when a chat is opened ─────────────────────────────────
   useEffect(()=>{
     if(!socket || !selectedUser || !user) return;
+    // Exit message selection when switching chats
+    setMsgSelectionMode(false);
+    setSelectedMsgs(new Set());
     axios.get(`${import.meta.env.VITE_API_URL}/message/messages/${selectedUser._id}`,{
       params: { userId: user._id },
       withCredentials:true
     }).then((res)=>{
       const formattedMessages = res.data.map(msg => ({
+        _id: msg._id,
         text: msg.message,
         type: msg.messageType || 'text',
         imageUrl: msg.imageUrl || null,
@@ -281,7 +291,7 @@ const Home = () => {
 
   useEffect(()=>{
     if(!socket) return;
-    socket.on("receive",({sender,msg})=>{
+    socket.on("receive",({sender, msg, _id, timestamp})=>{
       const currSelected = selectedUserRef.current;
       const currUser = userRef.current;
 
@@ -327,8 +337,11 @@ const Home = () => {
 
       if(currSelected && sender === currSelected._id){
         const newMessage = {
+          _id: _id || null,  // real DB id from server (enables instant selection)
           text: msg, type: 'text', imageUrl: null,
-          sender: 'them', timestamp: new Date(), isRead: false
+          sender: 'them',
+          timestamp: timestamp ? new Date(timestamp) : new Date(),
+          isRead: false
         };
         setMessages(prev=>[...prev,newMessage]);
         if(currUser && socket){
@@ -379,6 +392,7 @@ const Home = () => {
 
       if(currSelected && sender === currSelected._id){
         const newMessage = {
+          _id: null,
           text: '', type: 'image', imageUrl,
           sender: 'them', timestamp: new Date(), isRead: false
         };
@@ -413,11 +427,41 @@ const Home = () => {
     };
   }, [socket]);
 
+  // Real-time message deletion listener (handles messages deleted by the other user)
+  useEffect(() => {
+    if (!socket) return;
+    socket.on('messages-deleted', ({ messageIds }) => {
+      // Convert both sides to string to avoid ObjectId vs string mismatch
+      const ids = messageIds.map(id => String(id));
+      setMessages(prev => prev.filter(m => m._id && !ids.includes(String(m._id))));
+    });
+    return () => socket.off('messages-deleted');
+  }, [socket]);
+
+  // Patch optimistic message with real DB _id once server confirms save
+  useEffect(() => {
+    if (!socket) return;
+    socket.on('message-saved', ({ tempId, _id, timestamp }) => {
+      setMessages(prev => prev.map(m =>
+        m._tempId === tempId
+          ? { ...m, _id, timestamp: timestamp ? new Date(timestamp) : m.timestamp, _tempId: undefined }
+          : m
+      ));
+    });
+    return () => socket.off('message-saved');
+  }, [socket]);
+
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!messageInput.trim() || !selectedUser || !socket) return;
 
+    // Give each optimistic message a unique tempId so we can patch it
+    // when the server confirms the DB save and returns the real _id
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
     const newMessage = {
+      _tempId: tempId,  // used to match message-saved event
+      _id: null,        // no DB id yet
       text: messageInput,
       type: 'text',
       imageUrl: null,
@@ -439,13 +483,40 @@ const Home = () => {
       );
     });
 
-    // Send via socket
-    socket.emit('message', { recId: selectedUser._id, msg: messageInput });
-    // Stop typing indicator when message is sent
+    // Send via socket — include tempId so server can echo real _id back
+    socket.emit('message', { recId: selectedUser._id, msg: messageInput, tempId });
     socket.emit('stop-typing', { to: selectedUser._id });
     clearTimeout(typingTimeoutRef.current);
 
     setMessageInput('');
+
+    // Fallback: if server hasn't emitted "message-saved" within 1.2s (e.g. old server not restarted),
+    // do a fresh DB fetch and replace the message list — this gives all real _ids instantly.
+    const savedUser = selectedUser;
+    const savedUserId = user._id;
+    setTimeout(() => {
+      setMessages(current => {
+        const stillPending = current.some(m => m._tempId && !m._id);
+        if (!stillPending) return current; // message-saved already patched them, skip fetch
+        // Fetch from DB and replace list completely (avoids duplicates, always correct)
+        axios.get(`${import.meta.env.VITE_API_URL}/message/messages/${savedUser._id}`, {
+          params: { userId: savedUserId },
+          withCredentials: true
+        }).then(res => {
+          const formatted = res.data.map(msg => ({
+            _id: msg._id,
+            text: msg.message,
+            type: msg.messageType || 'text',
+            imageUrl: msg.imageUrl || null,
+            sender: msg.sender === savedUserId ? 'me' : 'them',
+            timestamp: new Date(msg.createdAt),
+            isRead: msg.isRead || false
+          }));
+          setMessages(formatted);
+        }).catch(() => {});
+        return current;
+      });
+    }, 1200);
   };
 
   const handleImageUpload = async (e) => {
@@ -518,6 +589,121 @@ const Home = () => {
       console.error('Logout failed:', error);
       logout();
       navigate('/login');
+    }
+  };
+
+  const toggleSelectionMode = () => {
+    setSelectionMode(v => !v);
+    setSelectedChats(new Set());
+  };
+
+  const toggleChatSelection = (userId) => {
+    setSelectedChats(prev => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  };
+
+  const handleDeleteChats = async () => {
+    if (!user || selectedChats.size === 0) return;
+    const ids = [...selectedChats];
+
+    // Optimistic UI update — remove immediately so the user sees instant feedback
+    setSidebarUsers(prev => prev.filter(u => !ids.includes(u._id)));
+    if (selectedUser && ids.includes(selectedUser._id)) {
+      setSelectedUser(null);
+      setMessages([]);
+    }
+    setSelectedChats(new Set());
+    setSelectionMode(false);
+
+    // Fire API calls in background — if they fail the page data is stale but UX is snappy
+    try {
+      await Promise.allSettled(
+        ids.map(otherId =>
+          axios.delete(
+            `${import.meta.env.VITE_API_URL}/conversation/by-participants`,
+            { params: { userId: user._id, otherId }, withCredentials: true }
+          )
+        )
+      );
+    } catch (err) {
+      console.error('Delete chats failed:', err);
+    }
+  };
+
+  const exitMsgSelection = () => {
+    setMsgSelectionMode(false);
+    setSelectedMsgs(new Set());
+  };
+
+  const enterMsgSelectionWith = (msgId) => {
+    setMsgSelectionMode(true);
+    setSelectedMsgs(new Set([msgId]));
+  };
+
+  const toggleMsgSelection = (msgId) => {
+    setSelectedMsgs(prev => {
+      const next = new Set(prev);
+      if (next.has(msgId)) next.delete(msgId);
+      else next.add(msgId);
+      return next;
+    });
+  };
+
+  const handleDeleteMessages = async () => {
+    if (!user || !selectedUser || selectedMsgs.size === 0) return;
+    // Only include messages that have a real DB _id (exclude pending optimistic ones)
+    const messageIds = [...selectedMsgs].filter(id => id && id !== 'null');
+    if (messageIds.length === 0) { exitMsgSelection(); return; }
+
+    // Compute remaining messages directly from current state (messages is always fresh at call time)
+    const idsSet = new Set(messageIds.map(String));
+    const remaining = messages.filter(m => !m._id || !idsSet.has(String(m._id)));
+    const lastRemaining = remaining.filter(m => m._id).slice(-1)[0];
+
+    // Update messages and sidebar cleanly as two separate state calls (never nest setState)
+    setMessages(remaining);
+    setSidebarUsers(prev => prev.map(u =>
+      u._id === selectedUser._id
+        ? {
+            ...u,
+            lastMessage: lastRemaining
+              ? (lastRemaining.type === 'image' ? '📷 Photo' : lastRemaining.text)
+              : ''
+          }
+        : u
+    ));
+    exitMsgSelection();
+
+    // Fire API in background
+    try {
+      await axios.delete(`${import.meta.env.VITE_API_URL}/message/messages`, {
+        data: { messageIds, deletedBy: user._id, otherId: selectedUser._id },
+        withCredentials: true
+      });
+    } catch (err) {
+      console.error('Delete messages failed:', err);
+      // On failure, reload messages from server to restore correct state
+      if (user && selectedUser) {
+        axios.get(`${import.meta.env.VITE_API_URL}/message/messages/${selectedUser._id}`, {
+          params: { userId: user._id },
+          withCredentials: true
+        }).then(res => {
+          const formatted = res.data.map(msg => ({
+            _id: msg._id,
+            text: msg.message,
+            type: msg.messageType || 'text',
+            imageUrl: msg.imageUrl || null,
+            sender: msg.sender === user._id ? 'me' : 'them',
+            timestamp: new Date(msg.createdAt),
+            isRead: msg.isRead || false
+          }));
+          setMessages(formatted);
+        }).catch(() => {});
+      }
     }
   };
 
@@ -717,23 +903,36 @@ const Home = () => {
         <div className="users-list">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px' }}>
             <h4 className="list-title" style={{ margin: 0 }}>Messages</h4>
-            <button
-              title="Start new chat"
-              onClick={() => { setShowNewChat(v => !v); setNewChatQuery(''); }}
-              style={{
-                background: showNewChat ? 'var(--accent-subtle)' : 'transparent',
-                border: '1px solid ' + (showNewChat ? 'var(--border-accent)' : 'transparent'),
-                borderRadius: '8px', padding: '5px 9px',
-                cursor: 'pointer', color: showNewChat ? 'var(--accent-primary)' : 'var(--text-muted)',
-                display: 'flex', alignItems: 'center', gap: '4px',
-                fontSize: '12px', fontWeight: 600, transition: 'all 0.15s ease', fontFamily: 'inherit'
-              }}
-            >
-              <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                <path d="M12 5v14M5 12h14"/>
-              </svg>
-              New Chat
-            </button>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              {/* Select / Cancel button */}
+              <button
+                title={selectionMode ? 'Cancel selection' : 'Select chats'}
+                onClick={toggleSelectionMode}
+                className={`select-mode-btn${selectionMode ? ' active' : ''}`}
+              >
+                {selectionMode ? 'Cancel' : 'Select'}
+              </button>
+              {/* New Chat button — hidden while in selection mode */}
+              {!selectionMode && (
+                <button
+                  title="Start new chat"
+                  onClick={() => { setShowNewChat(v => !v); setNewChatQuery(''); }}
+                  style={{
+                    background: showNewChat ? 'var(--accent-subtle)' : 'transparent',
+                    border: '1px solid ' + (showNewChat ? 'var(--border-accent)' : 'transparent'),
+                    borderRadius: '8px', padding: '5px 9px',
+                    cursor: 'pointer', color: showNewChat ? 'var(--accent-primary)' : 'var(--text-muted)',
+                    display: 'flex', alignItems: 'center', gap: '4px',
+                    fontSize: '12px', fontWeight: 600, transition: 'all 0.15s ease', fontFamily: 'inherit'
+                  }}
+                >
+                  <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                    <path d="M12 5v14M5 12h14"/>
+                  </svg>
+                  New Chat
+                </button>
+              )}
+            </div>
           </div>
 
           {/* ── New Chat Search Panel ── */}
@@ -796,16 +995,30 @@ const Home = () => {
           {sidebarUsers.filter(su => su.name?.toLowerCase().includes(contactSearch.toLowerCase()) || su.username?.toLowerCase().includes(contactSearch.toLowerCase())).map(u => (
             <div
               key={u._id}
-              className={`user-item ${selectedUser?._id === u._id ? 'active' : ''}`}
+              className={`user-item${selectedUser?._id === u._id && !selectionMode ? ' active' : ''}${selectionMode ? ' selectable' : ''}${selectedChats.has(u._id) ? ' selected-chat' : ''}`}
               onClick={() => {
-                setSelectedUser(u);
-                setMessages([]);
-                setIsSidebarOpen(false);
+                if (selectionMode) {
+                  toggleChatSelection(u._id);
+                } else {
+                  setSelectedUser(u);
+                  setMessages([]);
+                  setIsSidebarOpen(false);
+                }
               }}
             >
+              {/* Checkbox shown only in selection mode */}
+              {selectionMode && (
+                <div className={`chat-checkbox${selectedChats.has(u._id) ? ' checked' : ''}`}>
+                  {selectedChats.has(u._id) && (
+                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="2,6 5,9 10,3"/>
+                    </svg>
+                  )}
+                </div>
+              )}
               <div className="user-avatar-container">
                 <div className="user-avatar">{u.avatar || u.name?.charAt(0).toUpperCase() || '?'}</div>
-                {u.isOnline && <span className="online-indicator"></span>}
+                {u.isOnline && !selectionMode && <span className="online-indicator"></span>}
               </div>
               <div className="user-details">
                 <h5>{u.name}</h5>
@@ -813,14 +1026,32 @@ const Home = () => {
                   {u.lastMessage ? u.lastMessage : (u.isOnline ? '🟢 Online' : `@${u.username || ''}`)}
                 </p>
               </div>
-              <div className="message-meta">
-                <span className="message-time">{u.lastMessageTime ? formatTime(u.lastMessageTime) : ''}</span>
-                {u.noofUnreadMessages > 0 && (
-                  <span className="unread-badge">{u.noofUnreadMessages}</span>
-                )}
-              </div>
+              {!selectionMode && (
+                <div className="message-meta">
+                  <span className="message-time">{u.lastMessageTime ? formatTime(u.lastMessageTime) : ''}</span>
+                  {u.noofUnreadMessages > 0 && (
+                    <span className="unread-badge">{u.noofUnreadMessages}</span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
+
+          {/* ── Delete action bar ── */}
+          {selectionMode && selectedChats.size > 0 && (
+            <div className="delete-action-bar">
+              <span className="delete-count">{selectedChats.size} selected</span>
+              <button className="delete-chats-btn" onClick={handleDeleteChats}>
+                <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14H6L5 6"/>
+                  <path d="M10 11v6M14 11v6"/>
+                  <path d="M9 6V4h6v2"/>
+                </svg>
+                Delete
+              </button>
+            </div>
+          )}
 
           {sidebarUsers.length === 0 && !showNewChat && (
             <div style={{ textAlign: 'center', padding: '32px 16px', color: '#4b5563' }}>
@@ -836,42 +1067,71 @@ const Home = () => {
       <div className="chat-area">
         {selectedUser ? (
           <>
-            {/* Chat Header */}
+            {/* Chat Header — shows selection toolbar when in msgSelectionMode */}
             <div className="chat-header">
-              <button className="mobile-menu-btn" onClick={toggleSidebar}>
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-              </button>
-              <div className="chat-user-info">
-                <div className="user-avatar-container">
-                  <div className="user-avatar large">{selectedUser.avatar || selectedUser.name?.charAt(0).toUpperCase() || '?'}</div>
-                  {selectedUser.isOnline && <span className="online-indicator"></span>}
+              {msgSelectionMode ? (
+                /* ── Message selection toolbar ── */
+                <div className="msg-selection-toolbar">
+                  <button className="msg-sel-cancel" onClick={exitMsgSelection} title="Cancel">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    Cancel
+                  </button>
+                  <span className="msg-sel-count">
+                    {selectedMsgs.size} selected
+                  </span>
+                  <button
+                    className="msg-sel-delete"
+                    onClick={handleDeleteMessages}
+                    disabled={selectedMsgs.size === 0}
+                  >
+                    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                      <polyline points="3 6 5 6 21 6"/>
+                      <path d="M19 6l-1 14H6L5 6"/>
+                      <path d="M10 11v6M14 11v6"/>
+                      <path d="M9 6V4h6v2"/>
+                    </svg>
+                    Delete
+                  </button>
                 </div>
-                <div>
-                  <h3>{selectedUser.name}</h3>
-                  <p className="user-status-text">
-                    {selectedUser.isOnline ? 'Active now' : 'Offline'}
-                  </p>
-                </div>
-              </div>
-              <div className="chat-actions">
-                <button className="action-btn" title="Voice Call" onClick={() => { setShowMakeCall(true); startCallTimeout(() => setShowMakeCall(false)); }}>
-                  <svg fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
-                  </svg>
-                </button>
-                <button className="action-btn" title="Video Call">
-                  <svg fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
-                  </svg>
-                </button>
-                <button className="action-btn" title="More Options">
-                  <svg fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
-                  </svg>
-                </button>
-              </div>
+              ) : (
+                /* ── Normal header ── */
+                <>
+                  <button className="mobile-menu-btn" onClick={toggleSidebar}>
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                  </button>
+                  <div className="chat-user-info">
+                    <div className="user-avatar-container">
+                      <div className="user-avatar large">{selectedUser.avatar || selectedUser.name?.charAt(0).toUpperCase() || '?'}</div>
+                      {selectedUser.isOnline && <span className="online-indicator"></span>}
+                    </div>
+                    <div>
+                      <h3>{selectedUser.name}</h3>
+                      <p className="user-status-text">
+                        {selectedUser.isOnline ? 'Active now' : 'Offline'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="chat-actions">
+                    <button className="action-btn" title="Voice Call" onClick={() => { setShowMakeCall(true); startCallTimeout(() => setShowMakeCall(false)); }}>
+                      <svg fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+                      </svg>
+                    </button>
+                    <button className="action-btn" title="Video Call">
+                      <svg fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
+                      </svg>
+                    </button>
+                    <button className="action-btn" title="More Options">
+                      <svg fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                      </svg>
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Messages */}
@@ -884,29 +1144,57 @@ const Home = () => {
                 </div>
               ) : (
               messages.map((msg, idx) => (
-                  <div key={msg._id || msg._tempId || idx} className={`message ${msg.sender}`}>
-                    <div className="message-bubble">
-                      {msg.type === 'image' ? (
-                        <div className="message-image-wrapper">
-                          <img 
-                            src={msg.imageUrl} 
-                            alt="Sent image" 
-                            className={`message-image ${msg.isUploading ? 'uploading' : ''}`}
-                            onClick={() => setPreviewImage(msg.imageUrl)}
-                          />
-                          {msg.isUploading && <div className="image-upload-overlay"><span className="uploading-spinner large" /></div>}
-                        </div>
-                      ) : (
-                        <p>{msg.text}</p>
-                      )}
-                      <span className="message-time">
-                        {msg.sender === 'me' && (
-                          <span className={`read-receipt ${msg.isRead ? 'read' : 'unread'}`}>
-                            {msg.isRead ? '✓✓' : '✓'}
-                          </span>
+                  <div
+                    key={msg._id || msg._tempId || idx}
+                    className={`message ${msg.sender}${msgSelectionMode ? ' msg-selectable' : ''}${selectedMsgs.has(msg._id) ? ' msg-selected' : ''}`}
+                    onClick={() => {
+                      if (msgSelectionMode && msg._id) toggleMsgSelection(msg._id);
+                    }}
+                  >
+                    {/* Checkbox in selection mode (only left side = 'them' msgs shown on left; we show on correct side) */}
+                    {msgSelectionMode && msg._id && (
+                      <div className={`msg-checkbox${selectedMsgs.has(msg._id) ? ' checked' : ''}`}>
+                        {selectedMsgs.has(msg._id) && (
+                          <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="2,6 5,9 10,3"/>
+                          </svg>
                         )}
-                        {msg.timestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                      </span>
+                      </div>
+                    )}
+                    <div className="message-bubble-wrapper">
+                      {/* ⋮ context button — only on 'me' messages that have a real _id */}
+                      {!msgSelectionMode && msg.sender === 'me' && msg._id && (
+                        <button
+                          className="msg-context-btn"
+                          title="Select message"
+                          onClick={e => { e.stopPropagation(); enterMsgSelectionWith(msg._id); }}
+                        >
+                          ⋮
+                        </button>
+                      )}
+                      <div className="message-bubble">
+                        {msg.type === 'image' ? (
+                          <div className="message-image-wrapper">
+                            <img
+                              src={msg.imageUrl}
+                              alt="Sent image"
+                              className={`message-image ${msg.isUploading ? 'uploading' : ''}`}
+                              onClick={() => !msgSelectionMode && setPreviewImage(msg.imageUrl)}
+                            />
+                            {msg.isUploading && <div className="image-upload-overlay"><span className="uploading-spinner large" /></div>}
+                          </div>
+                        ) : (
+                          <p>{msg.text}</p>
+                        )}
+                        <span className="message-time">
+                          {msg.sender === 'me' && (
+                            <span className={`read-receipt ${msg.isRead ? 'read' : 'unread'}`}>
+                              {msg.isRead ? '✓✓' : '✓'}
+                            </span>
+                          )}
+                          {msg.timestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 ))

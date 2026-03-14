@@ -174,7 +174,7 @@ const socketConfig = (server) => {
 
     // ─── Messaging ────────────────────────────────────────────────────────────
 
-    socket.on("message", async ({ recId, msg }) => {
+    socket.on("message", async ({ recId, msg, tempId }) => {
       try {
         let conversation = await Conversation.findOne({ participants: { $all: [userId, recId] } });
 
@@ -197,9 +197,25 @@ const socketConfig = (server) => {
           await conversation.save();
         }
 
-        await Message.create({ sender: userId, receiver: recId, message: msg, conversation: conversation._id, isRead: false });
+        const savedMessage = await Message.create({
+          sender: userId,
+          receiver: recId,
+          message: msg,
+          conversation: conversation._id,
+          isRead: false
+        });
 
-        emitTo(io, recId, "receive", { sender: userId, msg });
+        // Send real DB _id back to sender so they can patch their optimistic message
+        const senderSocketId = userSocketMap[userId];
+        if (senderSocketId) {
+          io.to(senderSocketId).emit("message-saved", {
+            tempId,
+            _id: savedMessage._id.toString(),
+            timestamp: savedMessage.createdAt
+          });
+        }
+
+        emitTo(io, recId, "receive", { sender: userId, msg, _id: savedMessage._id.toString(), timestamp: savedMessage.createdAt });
       } catch (err) {
         console.error("message socket error:", err);
       }

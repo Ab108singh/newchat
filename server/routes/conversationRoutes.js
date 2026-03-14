@@ -1,8 +1,9 @@
 const express = require("express");
 const router = express.Router();
-const {createConversation,deleteConversation,getConversations} = require("../controllers/conversationControllers");
+const {createConversation,deleteConversation,getConversations,deleteConversationByParticipants} = require("../controllers/conversationControllers");
 
-router.post("/conversation",createConversation);
-router.delete("/conversation/:conversationId",deleteConversation);
-router.get("/conversations/:userId",getConversations);
-module.exports = router;        
+router.post("/", createConversation);
+router.delete("/by-participants", deleteConversationByParticipants);
+router.delete("/:conversationId", deleteConversation);
+router.get("/list/:userId", getConversations);
+module.exports = router;

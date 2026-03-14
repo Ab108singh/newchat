@@ -1122,3 +1122,280 @@
 
 @media (max-width: 768px) { .message-image { max-width: 180px; } }
 @media (max-width: 480px) { .message-image { max-width: 140px; } }
+
+/* ============================================================
+   SELECT & DELETE CHAT
+============================================================ */
+
+/* "Select" / "Cancel" toggle button */
+.select-mode-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 5px 9px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.select-mode-btn:hover {
+  background: var(--accent-subtle);
+  border-color: var(--border-accent);
+  color: var(--accent-primary);
+}
+
+.select-mode-btn.active {
+  background: rgba(239,68,68,0.1);
+  border-color: rgba(239,68,68,0.25);
+  color: var(--red);
+}
+
+/* User item in selectable state */
+.user-item.selectable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.user-item.selectable:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-subtle);
+  transform: translateX(2px);
+}
+
+/* Highlighted when selected */
+.user-item.selected-chat {
+  background: rgba(99,102,241,0.12);
+  border-color: var(--border-accent);
+}
+
+/* Circular checkbox */
+.chat-checkbox {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--border-accent);
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.18s ease;
+}
+
+.chat-checkbox.checked {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 10px var(--accent-glow);
+  transform: scale(1.05);
+}
+
+/* ---- Delete action bar ---- */
+.delete-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  margin: 4px 8px 6px;
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 11px;
+  animation: slideUp 0.2s ease;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.delete-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.delete-chats-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  background: var(--red, #ef4444);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 14px rgba(239,68,68,0.35);
+}
+
+.delete-chats-btn:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(239,68,68,0.45);
+}
+
+.delete-chats-btn:active {
+  transform: translateY(0);
+}
+
+/* ============================================================
+   MESSAGE SELECT & DELETE
+============================================================ */
+
+/* Wrapper around bubble + ⋮ button */
+.message-bubble-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.message.me .message-bubble-wrapper  { flex-direction: row-reverse; }
+.message.them .message-bubble-wrapper { flex-direction: row; }
+
+/* ⋮ context button — hidden by default, shown on bubble hover */
+.msg-context-btn {
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  background: var(--accent-subtle);
+  border: 1px solid var(--border-accent);
+  border-radius: 50%;
+  width: 26px;
+  height: 26px;
+  color: var(--accent-primary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-bottom: 4px;
+}
+
+.message:hover .msg-context-btn {
+  opacity: 1;
+}
+
+.msg-context-btn:hover {
+  background: var(--accent-primary);
+  color: white;
+  transform: scale(1.12);
+}
+
+/* Message selectable state */
+.message.msg-selectable {
+  cursor: pointer;
+  border-radius: 10px;
+  padding: 2px 4px;
+  margin-left: -4px;
+  margin-right: -4px;
+  transition: background 0.12s ease;
+}
+
+.message.msg-selectable:hover {
+  background: rgba(99,102,241,0.07);
+}
+
+/* Selected message highlight */
+.message.msg-selected {
+  background: rgba(99,102,241,0.13) !important;
+  border-radius: 10px;
+}
+
+/* Per-message checkbox */
+.msg-checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--border-accent);
+  background: transparent;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  align-self: center;
+  margin: 0 4px;
+}
+
+.msg-checkbox.checked {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+/* Selection toolbar inside the chat-header */
+.msg-selection-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  animation: fadeIn 0.15s ease;
+}
+
+.msg-sel-cancel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 7px 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.msg-sel-cancel:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.msg-sel-count {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.msg-sel-delete {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--red, #ef4444);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 14px rgba(239,68,68,0.35);
+}
+
+.msg-sel-delete:hover:not(:disabled) {
+  background: #dc2626;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(239,68,68,0.45);
+}
+
+.msg-sel-delete:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}

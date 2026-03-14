@@ -53,4 +53,26 @@ const deleteConversation = async(req,res)=>{
     }
 }
 
-module.exports = {getConversations,createConversation,deleteConversation};   
+// DELETE /api/conversation/by-participants?userId=<me>&otherId=<them>
+const deleteConversationByParticipants = async (req, res) => {
+    try {
+        const { userId, otherId } = req.query;
+        if (!userId || !otherId) {
+            return res.status(400).json({ message: "userId and otherId are required" });
+        }
+        const conversation = await Conversation.findOne({
+            participants: { $all: [userId, otherId] }
+        });
+        if (!conversation) {
+            return res.status(404).json({ message: "Conversation not found" });
+        }
+        await messageModel.deleteMany({ conversation: conversation._id });
+        await Conversation.findByIdAndDelete(conversation._id);
+        res.status(200).json({ message: "Conversation deleted" });
+    } catch (error) {
+        console.log(error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+module.exports = {getConversations, createConversation, deleteConversation, deleteConversationByParticipants};
